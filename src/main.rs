@@ -41,27 +41,11 @@ impl FromStr for Encoding {
     }
 }
 
-// Reed-Solomon encoded data. Length is used to discard padding bytes added to make the number of
-// bytes (u8s) in codes a multiple of the encoding data chunks.
-struct RSStream {
-    length: u64,
-    encoding: Encoding,
-    codes: Vec<Vec<u8>>,
-}
-
-impl RSStream {
-    fn empty(encoding: Encoding) -> Self {
-        RSStream {
-            length: 0,
-            encoding: encoding,
-            codes: Vec::new(),
-        }
-    }
-}
-
 // A polynomial over byte values.
 struct Polynomial {
     // Term coefficients for powers of x starting at 0 (i.e. coefficients[i] is for term cx^i).
+    // The last element must always be non-zero. This allows us to efficiently compute the degree
+    // from the length of this list without tracking it separately.
     coefficients: Vec<u8>,
 }
 
@@ -76,14 +60,14 @@ impl Polynomial {
 
     // Creates a Polynomial from a given vector of coefficients. Has degree d == coefficients.len()
     // - 1.
-    pub fn from_coefficients(coefficients: &Vec<u8>) -> Polynomial {
+    pub fn from_coefficients(coefficients: &Vec<u8>) -> Self {
         Polynomial {
             coefficients: coefficients.clone(),
         }
     }
 
     // Computes a single term Polynomial P such that P(i) == values[i].
-    fn single_term(values: &Vec<u8>, i: u8) -> Polynomial {
+    pub fn single_term(values: &Vec<u8>, i: u8) -> Self {
         let xi = i;
         let yi = values[i as usize];
 
@@ -94,7 +78,7 @@ impl Polynomial {
         //       |   | (xi - xj)
         //      j /= i
         let mut term = Self::from_coefficients(&vec![yi]);
-        for (xj, yj) in values.iter().enumerate().filter(|(x, y)| *x as u8 != xi) {
+        for (xj, _yj) in values.iter().enumerate().filter(|(x, _y)| *x as u8 != xi) {
             let xj = xj as u8;
             // Equivalent to the term:
             //
@@ -112,6 +96,11 @@ impl Polynomial {
         }
 
         return term;
+    }
+
+    // Generates a polynomial P, such that P(i) == values[i], for i in 0..values.len().
+    pub fn interpolate(values: &Vec<u8>) -> Self {
+        return Self::zero();
     }
 
     // Generates a polynomial from the given values. The values are intepreted as y-values for the
@@ -149,9 +138,61 @@ impl Polynomial {
         return Self::from_coefficients(&new_coefficients);
     }
 
+    // Returns the degree of the Polynomial which is defined as -1 for the zero Polynomial and the
+    // largest exponent (power) of x for any term (e.g. for `5 + x + 2x^3` it is `3`) otherwise,
+    // with the constant term having exponent `0`.
+    pub fn degree(self: &Self) -> i64 {
+        return self.coefficients.len() as i64 - 1;
+    }
+
+    // Returns whether this Polynomial is the zero Polynomial.
+    pub fn is_zero(self: &Self) -> bool {
+        return self.degree() == -1;
+    }
+
     pub fn mul(self: &Self, other: &Self) -> Self {
-        // TODO
-        Self::zero()
+        if self.is_zero() || other.is_zero() {
+            return Self::zero();
+        }
+
+        // Compute the degree of the resulting polynomial as the sum of degrees
+        let degree = self.degree() + other.degree();
+
+        let new_coefficients: Vec<u8> = iter::repeat(0u8).take((degree + 1) as usize).collect();
+        for (e1, c1) in self.coefficients.iter().enumerate() {
+            for (e2, c2) in other.coefficients.iter().enumerate() {
+                new_coefficients[e1 + e2] += c1 * c2;
+            }
+        }
+
+        return Self::from_coefficients(&new_coefficients);
+    }
+
+    pub fn evaluate(self: &Self, x: u8) -> u8 {
+        let mut result: u8 = 0
+        for e, c in self.coefficients.iter().enumerate() {
+            //result += 
+        } 
+
+        return result;
+    }
+}
+
+// Reed-Solomon encoded data. Length is used to discard padding bytes added to make the number of
+// bytes (u8s) in codes a multiple of the encoding data chunks.
+struct RSStream {
+    length: u64,
+    encoding: Encoding,
+    codes: Vec<Vec<u8>>,
+}
+
+impl RSStream {
+    fn empty(encoding: Encoding) -> Self {
+        RSStream {
+            length: 0,
+            encoding: encoding,
+            codes: Vec::new(),
+        }
     }
 }
 
@@ -163,12 +204,19 @@ fn encode_bytes(encoding: Encoding, bytes: &Vec<u8>) -> RSStream {
 
     // Pad out the input vector if it is not a multiple of the encoding's data chunk length so that
     // we have enough data to form a polynomial.
-    let padding = bytes.len() % (encoding.data_chunks as usize);
+    let padding = encoding.data_chunks - (bytes.len() % (encoding.data_chunks as usize));
+    let iterations = (bytes.len() + padding) / encoding.data_chunks;
     let input = bytes.iter().cloned().chain(iter::repeat(0u8).take(padding));
 
-    RSStream::empty(encoding)
+    // Generate our interpolated polynomial where P(i) for i from 0..encoding.data_chunks ==
+    // input[i * k] (where k is the iteration of bytes we are encoding).
+    let mut output: Vec<Vec<u8>> = Vec::with_capacity(iterations);
+    for k in (0..iterations) {
+        let p = Polynomial::interpolate(input);
+        output[k] = Vec::with_capacity(encoding.data_chunks + encoding.code_chunks);
+    }
 
-    // Generate a polynomial P, such that P(i) == input[i], for i in 0..input.len().
+    return RSStream::empty(encoding);
 }
 
 fn main() {
