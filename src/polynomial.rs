@@ -1,8 +1,8 @@
-#![feature(no_panic_pow)]
 use std::iter;
 use std::ops;
 
 // A polynomial over byte values.
+#[derive(Debug)]
 pub struct Polynomial {
     // Term coefficients for powers of x starting at 0 (i.e. coefficients[i] is for term cx^i).
     // The last element must always be non-zero. This allows us to efficiently compute the degree
@@ -136,5 +136,34 @@ impl Polynomial {
         }
 
         return result;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn degree_0() {
+        let p = Polynomial::from_coefficients(&[1]);
+        assert_eq!(p.degree(), 0);
+    }
+
+    #[test]
+    fn degree_1() {
+        let p = Polynomial::from_coefficients(&[0, 1]);
+        assert_eq!(p.degree(), 1);
+    }
+
+    #[test]
+    fn is_zero_true() {
+        let p = Polynomial::from_coefficients(&[]);
+        assert_eq!(p.is_zero(), true);
+    }
+
+    #[test]
+    fn is_zero_false() {
+        let p = Polynomial::from_coefficients(&[1]);
+        assert_eq!(p.is_zero(), false);
     }
 }

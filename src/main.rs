@@ -7,8 +7,8 @@ use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Clone)]
 struct Encoding {
-    data_chunks: u32,
-    code_chunks: u32,
+    data_chunks: u8,
+    code_chunks: u8,
 }
 
 impl FromStr for Encoding {
@@ -21,7 +21,7 @@ impl FromStr for Encoding {
         if !s.starts_with("rs=") {
             return Err("Encodings must start with \"rs=\"");
         }
-        let chunks: Vec<_> = s
+        let chunks: Vec<Result<u8, _>> = s
             .get(3..)
             .expect("string must start with rs=")
             .split(".")
@@ -29,14 +29,14 @@ impl FromStr for Encoding {
             .collect();
 
         match chunks[..] {
-            [Ok(total), Ok(code)] => {
-                if code <= total {
+            [Ok(data), Ok(code)] => {
+                if data.checked_add(code).is_some() {
                     Ok(Encoding {
-                        data_chunks: total - code,
+                        data_chunks: data,
                         code_chunks: code,
                     })
                 } else {
-                    Err("The number of code chunks must be less than or equal to the total number of chunks.")
+                    Err("Total number of chunks must be less than 256.")
                 }
             }
             _ => Err("Chunks must be specified in the form m.n where m and n are integers."),
@@ -47,7 +47,7 @@ impl FromStr for Encoding {
 // Reed-Solomon encoded data. Length is used to discard padding bytes added to make the number of
 // bytes (u8s) in codes a multiple of the encoding data chunks.
 struct RSStream {
-    length: u64,
+    length: usize,
     encoding: Encoding,
     codes: Vec<Vec<u8>>,
 }
@@ -60,6 +60,14 @@ impl RSStream {
             codes: Vec::new(),
         }
     }
+
+    fn encoded(length: usize, encoding: Encoding, codes: Vec<Vec<u8>>) -> Self {
+        RSStream {
+            length: length,
+            encoding: encoding,
+            codes: codes,
+        }
+    }
 }
 
 // Encode a stream of bytes as a list of 8 byte data chunks along with their code chunks.
@@ -70,14 +78,14 @@ fn encode_bytes(encoding: Encoding, bytes: &[u8]) -> RSStream {
 
     // Pad out the input vector if it is not a multiple of the encoding's data chunk length so that
     // we have enough data to form a polynomial.
-    let padding = encoding.data_chunks - (bytes.len() % (encoding.data_chunks as usize)) as u32;
+    let padding = encoding.data_chunks - (bytes.len() % (encoding.data_chunks as usize)) as u8;
     let iterations = (bytes.len() + padding as usize) / encoding.data_chunks as usize;
     // let input: Vec<u8> = bytes
     //     .into_iter()
     //     .cloned()
     //     .chain(iter::repeat(0u8).take(padding as usize))
     //     .collect();
-    let mut input = &mut bytes
+    let input = &mut bytes
         .into_iter()
         .cloned()
         .chain(iter::repeat(0u8).take(padding as usize));
@@ -90,15 +98,31 @@ fn encode_bytes(encoding: Encoding, bytes: &[u8]) -> RSStream {
         // let end = start + encoding.data_chunks as usize;
         // let v = &input[start..end];
         let v: Vec<u8> = input.take(encoding.data_chunks as usize).collect();
+        println!("Chunk: {:?}", v);
         let p = Polynomial::interpolate(&v[..]);
-        output[k] = Vec::with_capacity((encoding.data_chunks + encoding.code_chunks) as usize);
+        println!("Interpolated: {:?}", p);
+        output.push(Vec::with_capacity(
+            (encoding.data_chunks + encoding.code_chunks) as usize,
+        ));
+
+        let chunks = encoding.data_chunks + encoding.code_chunks;
+        for i in 0..chunks {
+            output[k].push(p.evaluate(i));
+            println!("k: {:?}, i: {:?}, value: {:?}", k, i, p.evaluate(i as u8));
+        }
     }
 
-    return RSStream::empty(encoding);
+    return RSStream::encoded(bytes.len(), encoding, output);
 }
 
 fn main() {
-    println!("Hello, world!");
+    let string = "Test string";
+    println!("Bytes: {:?}", string.as_bytes());
+    let encoding = Encoding::from_str("rs=6.4").expect("Should parse");
+    let stream = encode_bytes(encoding, string.as_bytes());
+    println!("Length: {:?}", stream.length);
+    println!("Encoding: {:?}", stream.encoding);
+    println!("Codes: {:?}", stream.codes);
 }
 
 #[cfg(test)]
@@ -108,7 +132,7 @@ mod tests {
     #[test]
     fn from_str_good() {
         let expected = Encoding {
-            data_chunks: 5,
+            data_chunks: 9,
             code_chunks: 4,
         };
         let actual: Result<Encoding, _> = FromStr::from_str("rs=9.4");
@@ -133,7 +157,7 @@ mod tests {
 
     #[test]
     fn from_str_invalid_encoding() {
-        let actual: Result<Encoding, _> = FromStr::from_str("rs=9.10");
+        let actual: Result<Encoding, _> = FromStr::from_str("rs=128.128");
         assert_eq!(actual.is_err(), true);
     }
 }
