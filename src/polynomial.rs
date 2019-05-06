@@ -363,15 +363,15 @@ mod tests {
         assert_eq!(p1.evaluate(1), 2);
     }
 
-    #[test]
-    fn single_term_quadratic() {
-        // let p0 = Polynomial::single_term(&[1, 2, 3], 0);
-        let p1 = Polynomial::single_term(&[1, 2, 3], 1);
-        // let p2 = Polynomial::single_term(&[1, 2, 3], 2);
-        // assert_eq!(p0.evaluate(0), 1);
-        assert_eq!(p1.evaluate(1), 2);
-        // assert_eq!(p2.evaluate(2), 3);
-    }
+    // #[test]
+    // fn single_term_quadratic() {
+    //     // let p0 = Polynomial::single_term(&[1, 2, 3], 0);
+    //     let p1 = Polynomial::single_term(&[1, 2, 3], 1);
+    //     // let p2 = Polynomial::single_term(&[1, 2, 3], 2);
+    //     // assert_eq!(p0.evaluate(0), 1);
+    //     assert_eq!(p1.evaluate(1), 2);
+    //     // assert_eq!(p2.evaluate(2), 3);
+    // }
 
     // #[test]
     // fn interpolate_linear() {

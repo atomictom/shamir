@@ -1,3 +1,4 @@
+mod finite_field;
 mod polynomial;
 
 use polynomial::Polynomial;
