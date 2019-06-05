@@ -12,33 +12,50 @@ pub struct FiniteField256 {
     // also need to support overflow during multiplication (the result of which will eventually be
     // reduced to an 8-bit integer by "modding" by an irreducible polynomial). So, we use a 16 bit
     // integer to support overflow.
-    polynomial: u16,
+    polynomial: u8,
 }
 
 impl FiniteField256 {
     // Additive identity.
     pub fn zero() -> Self {
-        FiniteField256 { polynomial: 0u16 }
+        FiniteField256 { polynomial: 0u8 }
     }
 
     // Multiplicative identity.
     pub fn one() -> Self {
-        FiniteField256 { polynomial: 1u16 }
+        FiniteField256 { polynomial: 1u8 }
     }
 
     // Represents the polynomial "x" (aka 1*x^1 + 0).
     pub fn x() -> Self {
-        FiniteField256 { polynomial: 2u16 }
+        FiniteField256 { polynomial: 2u8 }
+    }
+
+    // Returns the multiplicative inverse of an element.
+    pub fn inv(self: &Self) -> Self {
+        for i in 1..=255 {
+            let x = Self::from_byte(i);
+            if &x * self == Self::one() {
+                return x;
+            }
+        }
+        return Self::zero();
+    }
+
+    pub fn pow(self: &Self, power: u8) -> Self {
+        let mut result = Self::one();
+        for _ in 0..power {
+            result = &result * self;
+        }
+        return result;
     }
 
     pub fn from_byte(byte: u8) -> Self {
-        FiniteField256 {
-            polynomial: byte as u16,
-        }
+        FiniteField256 { polynomial: byte }
     }
 
     pub fn to_byte(self: Self) -> u8 {
-        return (self.polynomial & 0xFF) as u8;
+        return self.polynomial;
     }
 }
 
@@ -55,8 +72,6 @@ impl FiniteField256 {
 impl ops::Add for FiniteField256 {
     type Output = FiniteField256;
 
-    // Precondition: the upper 8-bits should be 0.
-    // Postcondition: the upper 8-bits will be 0 if the precondition is met.
     fn add(self: Self, other: Self) -> Self::Output {
         return FiniteField256 {
             polynomial: self.polynomial ^ other.polynomial,
@@ -104,6 +119,53 @@ impl ops::Neg for &FiniteField256 {
     }
 }
 
+impl ops::Mul for FiniteField256 {
+    type Output = FiniteField256;
+
+    fn mul(self: Self, other: Self) -> Self::Output {
+        let irreducible = 0b100011101u16;
+        let mut other = other.polynomial;
+        let mut result = 0u16;
+        for _ in 0..8 {
+            result <<= 1;
+            if other & 0x80 > 0 {
+                result ^= self.polynomial as u16;
+            }
+            other <<= 1;
+            if result >= 256 {
+                result ^= irreducible;
+            }
+        }
+        return FiniteField256 {
+            polynomial: result as u8,
+        };
+    }
+}
+
+impl ops::Mul for &FiniteField256 {
+    type Output = FiniteField256;
+
+    fn mul(self: Self, other: Self) -> Self::Output {
+        return self.clone() * other.clone();
+    }
+}
+
+impl ops::Div for FiniteField256 {
+    type Output = FiniteField256;
+
+    fn div(self: Self, other: Self) -> Self::Output {
+        return self * other.inv();
+    }
+}
+
+impl ops::Div for &FiniteField256 {
+    type Output = FiniteField256;
+
+    fn div(self: Self, other: Self) -> Self::Output {
+        return self.clone() / other.clone();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,4 +194,53 @@ mod tests {
         let y = FiniteField256::from_byte(0xF1);
         assert_eq!(&x + &y, &x - &y);
     }
+
+    #[test]
+    fn one_multiplicative_identity() {
+        for i in 0..=255 {
+            let x = FiniteField256::from_byte(i);
+            assert_eq!(x, &FiniteField256::one() * &x);
+            assert_eq!(x, &x * &FiniteField256::one());
+        }
+    }
+
+    #[test]
+    fn mul_commutative() {
+        for i in 0..=255 {
+            for j in 0..=255 {
+                let x = FiniteField256::from_byte(i);
+                let y = FiniteField256::from_byte(j);
+                assert_eq!(&x * &y, &y * &x);
+            }
+        }
+    }
+
+    #[test]
+    fn inv_closed() {
+        for i in 1..=255 {
+            let x = FiniteField256::from_byte(i);
+            assert!(x.inv() != FiniteField256::zero());
+        }
+    }
+
+    #[test]
+    fn inv_identity() {
+        for i in 1..=255 {
+            let x = FiniteField256::from_byte(i);
+            assert_eq!(&x * &x.inv(), FiniteField256::one());
+        }
+    }
+
+    // #[test]
+    // fn mul_div_inverse() {
+    //     for i in 1..=255 {
+    //         for j in 1..=255 {
+    //             let x = FiniteField256::from_byte(i);
+    //             let y = FiniteField256::from_byte(j);
+    //             let z = &x * &y;
+    //             assert_eq!(&z / &x, y);
+    //             assert_eq!(&z / &y, x);
+    //         }
+    //     }
+    // }
 }
