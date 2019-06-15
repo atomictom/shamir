@@ -109,13 +109,10 @@ impl Polynomial {
     }
 
     // Computes a single term Polynomial P such that P(i) == values[i].
-    pub fn single_term(values: &[u8], i: u8) -> Self {
-        if values.len() == 0 {
+    pub fn single_term(points: &[(u8, u8)], (xi, yi): (u8, u8)) -> Self {
+        if points.len() == 0 {
             return Polynomial::zero();
         }
-
-        let xi = FiniteField256::from_byte(i);
-        let yi = values[i as usize];
 
         // Computes the term:
         //        ___
@@ -124,14 +121,14 @@ impl Polynomial {
         //       |   | (xi - xj)
         //      j /= i
         let mut term = Self::from_bytes(&[yi]);
-        for (xj, _yj) in values.iter().enumerate().filter(|(x, _y)| *x as u8 != i) {
-            let xj = xj as u8;
+        for (xj, _) in points.iter().filter(|(x, _)| *x != xi) {
             // Equivalent to the term:
             //
             //   (x - xj)
             //   ---------
             //   (xi - xj)
-            let xj = FiniteField256::from_byte(xj);
+            let xj = FiniteField256::from_byte(*xj);
+            let xi = FiniteField256::from_byte(xi);
             let denominator = &xi - &xj;
             let zeroth_term = &xj / &denominator;
             let first_term = &FiniteField256::one() / &denominator;
@@ -144,15 +141,29 @@ impl Polynomial {
         return term;
     }
 
+    fn single_term_ys(ys: &[u8], i: u8) -> Self {
+        assert!((i as usize) < ys.len());
+        let points: Vec<_> = ys.iter().enumerate().map(|(x, y)| (x as u8, *y)).collect();
+        Self::single_term(&points[..], (i, ys[i as usize]))
+    }
+
     // Generates a polynomial from the given values. The values are intepreted as y-values for the
     // polynomial with the x-values being their index within the vector. That is to say, for a
     // vector of n values, we would interpolate using [(0, values[0], ..., (n-1, values[n-1])].
-    pub fn interpolate(values: &[u8]) -> Self {
-        if values.len() == 0 {
+    pub fn interpolate(ys: &[u8]) -> Self {
+        let points: Vec<_> = ys.iter().enumerate().map(|(x, y)| (x as u8, *y)).collect();
+        Self::interpolate_points(&points[..])
+    }
+
+    // Generates a polynomial from the given values. The values are (x, y) coordinate pairs.
+    pub fn interpolate_points(points: &[(u8, u8)]) -> Self {
+        if points.len() == 0 {
             return Self::zero();
         }
-        return (0..values.len() - 1)
-            .map(|i| Self::single_term(values, i as u8))
+        assert!(points.len() < 256);
+        return points
+            .iter()
+            .map(|p| Self::single_term(points, *p))
             .fold(Self::zero(), |x, y| &x + &y);
     }
 
@@ -171,7 +182,7 @@ impl Polynomial {
     pub fn evaluate(self: &Self, x: u8) -> u8 {
         let mut result: FiniteField256 = FiniteField256::zero();
         for (e, c) in self.coefficients.iter().enumerate() {
-            result = result + (&FiniteField256::from_byte(x).pow(e as u8) * c);
+            result = result + (&FiniteField256::from_byte(x).pow(e as u32) * c);
         }
 
         return result.to_byte();
@@ -248,14 +259,8 @@ mod tests {
     }
 
     #[test]
-    fn single_term_zero() {
-        let p = Polynomial::single_term(&[], 0);
-        assert_eq!(p, Polynomial::zero());
-    }
-
-    #[test]
     fn single_term_constant() {
-        let p = Polynomial::single_term(&[5], 0);
+        let p = Polynomial::single_term_ys(&[5], 0);
         assert_eq!(p, Polynomial::from_bytes(&[5]));
         assert_eq!(p.evaluate(0), 5);
         assert_eq!(p.evaluate(1), 5);
@@ -264,28 +269,47 @@ mod tests {
 
     #[test]
     fn single_term_linear() {
-        let p0 = Polynomial::single_term(&[1, 2], 0);
-        let p1 = Polynomial::single_term(&[1, 2], 1);
+        let p0 = Polynomial::single_term_ys(&[1, 2], 0);
+        let p1 = Polynomial::single_term_ys(&[1, 2], 1);
         assert_eq!(p0.evaluate(0), 1);
         assert_eq!(p1.evaluate(1), 2);
     }
 
-    // #[test]
-    // fn single_term_quadratic() {
-    //     // let p0 = Polynomial::single_term(&[1, 2, 3], 0);
-    //     let p1 = Polynomial::single_term(&[1, 2, 3], 1);
-    //     // let p2 = Polynomial::single_term(&[1, 2, 3], 2);
-    //     // assert_eq!(p0.evaluate(0), 1);
-    //     assert_eq!(p1.evaluate(1), 2);
-    //     // assert_eq!(p2.evaluate(2), 3);
-    // }
+    #[test]
+    fn interpolate_same() {
+        let p0 = Polynomial::interpolate(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        let p1 = Polynomial::interpolate_points(&[(0, 0xDE), (1, 0xAD), (2, 0xBE), (3, 0xEF)]);
+        assert_eq!(p0, p1);
+    }
 
-    // #[test]
-    // fn interpolate_linear() {
-    //     let p = Polynomial::interpolate(&[1, 2]);
-    //     assert_eq!(p, Polynomial::from_bytes(&[1, 1]));
-    //     assert_eq!(p.evaluate(0), 1);
-    //     assert_eq!(p.evaluate(1), 2);
-    //     assert_eq!(p.evaluate(2), 3);
-    // }
+    #[test]
+    fn evaluate_interpolated_initial_gives_initial() {
+        let p = Polynomial::interpolate(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(0xDE, p.evaluate(0));
+        assert_eq!(0xAD, p.evaluate(1));
+        assert_eq!(0xBE, p.evaluate(2));
+        assert_eq!(0xEF, p.evaluate(3));
+    }
+
+    #[test]
+    fn evaluate_interpolated_after() {
+        let p0 = Polynomial::interpolate(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        let p1 = Polynomial::interpolate_points(&[(0, 0xDE), (1, 0xAD), (2, 0xBE), (3, 0xEF)]);
+        assert_eq!(p0.evaluate(4), p1.evaluate(4));
+    }
+
+    #[test]
+    fn evaluate_forget_evaluate() {
+        let p0 = Polynomial::interpolate(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        let e = p0.evaluate(4);
+        let p1 = Polynomial::interpolate_points(&[(0, 0xDE), (1, 0xAD), (2, 0xBE), (4, e)]);
+        assert_eq!(p0, p1);
+    }
+
+    #[test]
+    fn evaluate_forget_more_evaluate() {
+        let p = Polynomial::interpolate(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        let points: Vec<_> = (4..8).map(|x| (x, p.evaluate(x))).collect();
+        assert_eq!(p, Polynomial::interpolate_points(&points));
+    }
 }

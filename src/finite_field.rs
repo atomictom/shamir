@@ -42,7 +42,7 @@ impl FiniteField256 {
         return Self::zero();
     }
 
-    pub fn pow(self: &Self, power: u8) -> Self {
+    pub fn pow(self: &Self, power: u32) -> Self {
         let mut result = Self::one();
         for _ in 0..power {
             result = &result * self;
@@ -54,7 +54,7 @@ impl FiniteField256 {
         FiniteField256 { polynomial: byte }
     }
 
-    pub fn to_byte(self: Self) -> u8 {
+    pub fn to_byte(self: &Self) -> u8 {
         return self.polynomial;
     }
 }
@@ -123,18 +123,24 @@ impl ops::Mul for FiniteField256 {
     type Output = FiniteField256;
 
     fn mul(self: Self, other: Self) -> Self::Output {
-        let irreducible = 0b100011101u16;
-        let mut other = other.polynomial;
-        let mut result = 0u16;
+        // The AES polynomial, without the leading bit (we shift it out from `b` before reducing).
+        let irreducible: u8 = 0b00011011u8;
+        let mut a: u8 = self.polynomial;
+        let mut b: u8 = other.polynomial;
+        let mut result: u8 = 0u8;
+        // "Russian peasant" multiplication for GF extension fields.
         for _ in 0..8 {
-            result <<= 1;
-            if other & 0x80 > 0 {
-                result ^= self.polynomial as u16;
+            // If (x & 1) == 1, then negating it gives all "1"s via 2s-complement, otherwise, -0 ==
+            // 0, so we can use this to mask in/out certain values.
+            result ^= (b & 1).wrapping_neg() & a;
+            // Shift and break as early as possible.
+            b >>= 1;
+            if b == 0 {
+                break;
             }
-            other <<= 1;
-            if result >= 256 {
-                result ^= irreducible;
-            }
+            // If b would have a "carry" when doubling it, reduce it via the irreducible
+            // polynomial.
+            a = (a << 1) ^ (((a & 0b10000000) >> 7).wrapping_neg() & irreducible);
         }
         return FiniteField256 {
             polynomial: result as u8,
@@ -231,6 +237,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn mul_generator() {
+        let mut exists: [bool; 256] = [false; 256];
+        let x = FiniteField256::from_byte(3);
+        for i in 1..=255 {
+            let y = x.pow(i).to_byte();
+            println!("y: {:01x}", y);
+            exists[y as usize] = true;
+        }
+        for i in 1..=255 {
+            println!("i: {:?}, exists: {:?}", i, exists[i]);
+            assert!(exists[i]);
+        }
+    }
+    //
     // #[test]
     // fn mul_div_inverse() {
     //     for i in 1..=255 {
