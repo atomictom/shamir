@@ -3,32 +3,28 @@ use std::ops;
 // A finite field with 256 elements. Also known as a Galois extension field, F(2^8). As a field, it
 // supports addition, additive inverse, additive identity, multiplication for non-zero elements,
 // multiplicative identity, and multiplicative inverse.
+//
+// A finite extension field is a "polynomial" where each coefficient is an element of the field
+// being extended (in this case, our extension field is F(2^8) so our coefficients are elements
+// of F(2). Because we are using F(2^8) we have a polynomial of length 8, each with elements
+// either 0 or 1. Thus, we can represent each polynomial with an 8 bit integer.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct FiniteField256 {
-    // A finite extension field is a "polynomial" where each coefficient is an element of the field
-    // being extended (in this case, our extension field is F(2^8) so our coefficients are elements
-    // of F(2). Because we are using F(2^8) we have a polynomial of length 8, each with elements
-    // either 0 or 1. Thus, we can represent each polynomial with an 8 bit integer. However, we
-    // also need to support overflow during multiplication (the result of which will eventually be
-    // reduced to an 8-bit integer by "modding" by an irreducible polynomial). So, we use a 16 bit
-    // integer to support overflow.
-    polynomial: u8,
-}
+pub struct FiniteField256(pub u8);
 
 impl FiniteField256 {
     // Additive identity.
     pub fn zero() -> Self {
-        FiniteField256 { polynomial: 0u8 }
+        FiniteField256(0u8)
     }
 
     // Multiplicative identity.
     pub fn one() -> Self {
-        FiniteField256 { polynomial: 1u8 }
+        FiniteField256(1u8)
     }
 
     // Represents the polynomial "x" (aka 1*x^1 + 0).
     pub fn x() -> Self {
-        FiniteField256 { polynomial: 2u8 }
+        FiniteField256(2u8)
     }
 
     // Returns the multiplicative inverse of an element.
@@ -39,6 +35,7 @@ impl FiniteField256 {
                 return x;
             }
         }
+        assert!(false, "No multiplicative inv for {:?}", self);
         return Self::zero();
     }
 
@@ -51,11 +48,12 @@ impl FiniteField256 {
     }
 
     pub fn from_byte(byte: u8) -> Self {
-        FiniteField256 { polynomial: byte }
+        FiniteField256(byte)
     }
 
     pub fn to_byte(self: &Self) -> u8 {
-        return self.polynomial;
+        let Self(byte) = *self;
+        return byte;
     }
 }
 
@@ -72,10 +70,9 @@ impl FiniteField256 {
 impl ops::Add for FiniteField256 {
     type Output = FiniteField256;
 
-    fn add(self: Self, other: Self) -> Self::Output {
-        return FiniteField256 {
-            polynomial: self.polynomial ^ other.polynomial,
-        };
+    fn add(self: Self, Self(b): Self) -> Self::Output {
+        let Self(a) = self;
+        Self(a ^ b)
     }
 }
 
@@ -124,10 +121,10 @@ impl ops::Mul for FiniteField256 {
 
     fn mul(self: Self, other: Self) -> Self::Output {
         // The AES polynomial, without the leading bit (we shift it out from `b` before reducing).
-        let irreducible: u8 = 0b00011011u8;
-        let mut a: u8 = self.polynomial;
-        let mut b: u8 = other.polynomial;
-        let mut result: u8 = 0u8;
+        let irreducible = 0b00011011u8;
+        let Self(mut a) = self;
+        let Self(mut b) = other;
+        let mut result = 0u8;
         // "Russian peasant" multiplication for GF extension fields.
         for _ in 0..8 {
             // If (x & 1) == 1, then negating it gives all "1"s via 2s-complement, otherwise, -0 ==
@@ -142,9 +139,7 @@ impl ops::Mul for FiniteField256 {
             // polynomial.
             a = (a << 1) ^ (((a & 0b10000000) >> 7).wrapping_neg() & irreducible);
         }
-        return FiniteField256 {
-            polynomial: result as u8,
-        };
+        FiniteField256(result)
     }
 }
 
