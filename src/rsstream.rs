@@ -76,17 +76,17 @@ impl RSStream {
         };
     }
 
-    pub fn decode_bytes(stream: RSStream) -> Result<Vec<u8>, &'static str> {
+    pub fn decode_bytes(self: Self) -> Result<Vec<u8>, &'static str> {
         let RSStream {
             length,
             encoding,
             codes,
             erasures,
-        } = stream;
+        } = self;
         if length == 0 {
             return Ok(Vec::new());
         }
-        if erasures.iter().filter(|x| **x).map(|_x| 1).sum::<u8>() >= encoding.code_chunks {
+        if erasures.iter().filter(|x| **x).map(|_x| 1).sum::<u8>() > encoding.code_chunks {
             return Err("Too many erasures to recover");
         }
 
@@ -101,8 +101,36 @@ impl RSStream {
                 let col = i % encoding.data_chunks as usize;
                 res.insert(i, codes[row][col]);
             }
+            return Ok(res);
+        } else {
+            let mut res = Vec::with_capacity(length);
+            // First, figure out which indices are valid.
+            let valid_indices: Vec<_> = erasures
+                .iter()
+                .enumerate()
+                .filter(|(_, y)| !**y)
+                .map(|(x, _)| x)
+                .take(encoding.data_chunks as usize)
+                .collect();
+
+            // Now, for each input row, interpolate the polynomial and then generate our data
+            // points.
+            let rows = length / encoding.data_chunks as usize;
+            for row in 0..rows {
+                let row = row as usize;
+                let points: Vec<_> = valid_indices
+                    .iter()
+                    .map(|col| (*col as u8, codes[row][*col as usize]))
+                    .collect();
+                let p = Polynomial::interpolate_points(&points[..]);
+                for col in 0..encoding.data_chunks {
+                    let i = row * encoding.data_chunks as usize + col as usize;
+                    res.insert(i, p.evaluate(col as u8));
+                }
+            }
+
+            return Ok(res);
         }
-        return Ok(Vec::new());
     }
 }
 
@@ -134,5 +162,61 @@ mod tests {
     }
 
     #[test]
-    fn decode_bytes_empty() {}
+    fn decode_bytes_no_erasures() {
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let input = RSStream {
+            length: 8,
+            encoding: encoding.clone(),
+            codes: vec![
+                vec![0x44, 0x45, 0x41, 0x44, 0x02, 0x1B],
+                vec![0x42, 0x45, 0x45, 0x46, 0x38, 0x27],
+            ],
+            erasures: vec![false, false, false, false, false, false],
+        };
+        let res = input.decode_bytes();
+        assert!(res.is_ok());
+        assert_eq!(
+            res.unwrap(),
+            vec![0x44, 0x45, 0x41, 0x44, 0x42, 0x45, 0x45, 0x46]
+        );
+    }
+
+    #[test]
+    fn decode_bytes_code_erasure() {
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let input = RSStream {
+            length: 8,
+            encoding: encoding.clone(),
+            codes: vec![
+                vec![0x44, 0x45, 0x41, 0x44, 0x00, 0x00],
+                vec![0x42, 0x45, 0x45, 0x46, 0x00, 0x00],
+            ],
+            erasures: vec![false, false, false, false, true, true],
+        };
+        let res = input.decode_bytes();
+        assert!(res.is_ok());
+        assert_eq!(
+            res.expect("Got: "),
+            vec![0x44, 0x45, 0x41, 0x44, 0x42, 0x45, 0x45, 0x46]
+        );
+    }
+
+    #[test]
+    fn decode_bytes_data_erasure() {
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let input = RSStream {
+            length: 8,
+            encoding: encoding.clone(),
+            codes: vec![
+                vec![0x00, 0x45, 0x00, 0x44, 0x02, 0x1B],
+                vec![0x00, 0x45, 0x00, 0x46, 0x38, 0x27],
+            ],
+            erasures: vec![true, false, true, false, false, false],
+        };
+        let res = input.decode_bytes();
+        assert_eq!(
+            res.expect("Got: "),
+            vec![0x44, 0x45, 0x41, 0x44, 0x42, 0x45, 0x45, 0x46]
+        );
+    }
 }
