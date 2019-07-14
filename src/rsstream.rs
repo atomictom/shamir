@@ -10,6 +10,8 @@ pub struct RSStream {
     pub length: usize,
     pub encoding: Encoding,
     pub codes: Vec<Vec<u8>>,
+    // True for [i] if there was an erasure in codes[i].
+    pub erasures: Vec<bool>,
 }
 
 impl RSStream {
@@ -18,6 +20,7 @@ impl RSStream {
             length: 0,
             encoding: encoding,
             codes: Vec::new(),
+            erasures: Vec::new(),
         }
     }
 
@@ -27,10 +30,11 @@ impl RSStream {
             return RSStream::empty(encoding);
         }
 
-        // Pad out the input vector if it is not a multiple of the encoding's data chunk length so that
-        // we have enough data to form a polynomial.
+        // The number of stripes
+        let iterations = bytes.len() / encoding.data_chunks as usize;
+        // Pad out the input vector if it is not a multiple of the encoding's data chunk length so
+        // that we have enough data to form a polynomial.
         let padding = encoding.data_chunks - (bytes.len() % (encoding.data_chunks as usize)) as u8;
-        let iterations = (bytes.len() + padding as usize) / encoding.data_chunks as usize;
         // let input: Vec<u8> = bytes
         //     .into_iter()
         //     .cloned()
@@ -63,11 +67,42 @@ impl RSStream {
             }
         }
 
+        let total_chunks = encoding.total_chunks();
         return RSStream {
             length: bytes.len(),
             encoding: encoding,
             codes: output,
+            erasures: iter::repeat(false).take(total_chunks).collect(),
         };
+    }
+
+    pub fn decode_bytes(stream: RSStream) -> Result<Vec<u8>, &'static str> {
+        let RSStream {
+            length,
+            encoding,
+            codes,
+            erasures,
+        } = stream;
+        if length == 0 {
+            return Ok(Vec::new());
+        }
+        if erasures.iter().filter(|x| **x).map(|_x| 1).sum::<u8>() >= encoding.code_chunks {
+            return Err("Too many erasures to recover");
+        }
+
+        if erasures
+            .iter()
+            .take(encoding.data_chunks as usize)
+            .all(|x| !*x)
+        {
+            let mut res = Vec::with_capacity(length);
+            for i in 0..length {
+                let row = i / encoding.data_chunks as usize;
+                let col = i % encoding.data_chunks as usize;
+                res.insert(i, codes[row][col]);
+            }
+        }
+        return Ok(Vec::new());
     }
 }
 
@@ -81,4 +116,23 @@ mod tests {
         let expected = RSStream::empty(encoding.clone());
         assert_eq!(RSStream::encode_bytes(encoding, &[]), expected);
     }
+
+    #[test]
+    fn encode_bytes_small() {
+        let bytes = "DEADBEEF".as_bytes();
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let expected = RSStream {
+            length: 8,
+            encoding: encoding.clone(),
+            codes: vec![
+                vec![0x44, 0x45, 0x41, 0x44, 0x02, 0x1B],
+                vec![0x42, 0x45, 0x45, 0x46, 0x38, 0x27],
+            ],
+            erasures: vec![false, false, false, false, false, false],
+        };
+        assert_eq!(RSStream::encode_bytes(encoding, &bytes), expected);
+    }
+
+    #[test]
+    fn decode_bytes_empty() {}
 }

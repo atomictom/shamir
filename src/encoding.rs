@@ -7,6 +7,12 @@ pub struct Encoding {
     pub code_chunks: u8,
 }
 
+impl Encoding {
+    pub fn total_chunks(self: &Self) -> usize {
+        return (self.data_chunks + self.code_chunks) as usize;
+    }
+}
+
 impl FromStr for Encoding {
     type Err = &'static str;
 
