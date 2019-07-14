@@ -219,4 +219,20 @@ mod tests {
             vec![0x44, 0x45, 0x41, 0x44, 0x42, 0x45, 0x45, 0x46]
         );
     }
+
+    #[test]
+    fn decode_bytes_too_many_erasures() {
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let input = RSStream {
+            length: 8,
+            encoding: encoding.clone(),
+            codes: vec![
+                vec![0x00, 0x00, 0x00, 0x44, 0x02, 0x1B],
+                vec![0x00, 0x00, 0x00, 0x46, 0x38, 0x27],
+            ],
+            erasures: vec![true, true, true, false, false, false],
+        };
+        let res = input.decode_bytes();
+        assert_eq!(res.is_err(), true);
+    }
 }
