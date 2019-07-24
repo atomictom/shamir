@@ -1,3 +1,5 @@
+use std::default;
+
 // The AES polynomial, without the leading bit (we shift it out before reducing).
 const IRREDUCIBLE: u8 = 0b00011011;
 
@@ -101,6 +103,120 @@ impl Field256 for DirectField {
     }
 }
 
+pub struct ExpLogField {
+    exp: [u8; 512],
+    log: [u8; 256],
+}
+
+impl default::Default for ExpLogField {
+    fn default() -> Self {
+        let direct = DirectField::default();
+        let mut x = Self::one();
+        let mut res = Self {
+            exp: [0; 512],
+            log: [0; 256],
+        };
+        for i in 0..=255 {
+            res.exp[i] = x;
+            res.exp[i + 255] = x;
+            res.log[x as usize] = i as u8;
+            x = direct.mul(x, GENERATOR);
+        }
+
+        return res;
+    }
+}
+
+impl Field256 for ExpLogField {
+    fn mul(&self, x: u8, y: u8) -> u8 {
+        if x == 0 || y == 0 {
+            return 0;
+        }
+        let logx: i16 = self.log[x as usize] as i16;
+        let logy: i16 = self.log[y as usize] as i16;
+        return self.exp[(logx + logy) as usize];
+    }
+
+    fn div(&self, x: u8, y: u8) -> u8 {
+        if x == 0 {
+            return 0;
+        } else if y == 0 {
+            panic!("Cannot divide by zero!");
+        }
+        let logx: i16 = self.log[x as usize] as i16;
+        let logy: i16 = self.log[y as usize] as i16;
+        return self.exp[(logx - logy + 255) as usize];
+    }
+
+    fn inv(&self, x: u8) -> u8 {
+        if x == 0 {
+            return 0;
+        }
+        return self.exp[255 - self.log[x as usize] as usize];
+    }
+
+    fn exp(&self, x: u8, y: u8) -> u8 {
+        if x == 0 {
+            return 0;
+        } else if y == 0 {
+            return 1;
+        }
+        let logx: u16 = self.log[x as usize] as u16;
+        let logy: u16 = self.log[y as usize] as u16;
+        return self.exp[((logx * logy) % 256) as usize];
+    }
+}
+
+pub struct TableField {
+    inv: [u8; 256],
+    mul: [[u8; 256]; 256],
+}
+
+impl default::Default for TableField {
+    fn default() -> Self {
+        let direct = DirectField::default();
+        let mut res = Self {
+            inv: [0; 256],
+            mul: [[0; 256]; 256],
+        };
+        for i in 1..=255 {
+            res.inv[i as usize] = direct.inv(i)
+        }
+        for i in 0..=255 {
+            for j in 0..=255 {
+                res.mul[i as usize][j as usize] = direct.mul(i, j);
+            }
+        }
+
+        return res;
+    }
+}
+
+impl Field256 for TableField {
+    fn mul(&self, x: u8, y: u8) -> u8 {
+        if x == 0 || y == 0 {
+            return 0;
+        }
+        return self.mul[x as usize][y as usize];
+    }
+
+    fn div(&self, x: u8, y: u8) -> u8 {
+        if x == 0 {
+            return 0;
+        } else if y == 0 {
+            panic!("Cannot divide by zero!");
+        }
+        return self.mul[x as usize][self.inv[y as usize] as usize];
+    }
+
+    fn inv(&self, x: u8) -> u8 {
+        if x == 0 {
+            return 0;
+        }
+        return self.inv[x as usize];
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,18 +244,23 @@ mod tests {
         assert_eq!(DirectField::add(x, y), DirectField::sub(x, y));
     }
 
-    #[test]
-    fn one_multiplicative_identity() {
-        let field = DirectField::default();
+    fn one_multiplicative_identity_for<T: Field256 + Default>() {
+        let field = T::default();
         for i in 0..=255 {
-            assert_eq!(i, field.mul(DirectField::one(), i));
-            assert_eq!(i, field.mul(i, DirectField::one()));
+            assert_eq!(i, field.mul(T::one(), i));
+            assert_eq!(i, field.mul(i, T::one()));
         }
     }
 
     #[test]
-    fn mul_commutative() {
-        let field = DirectField::default();
+    fn one_multiplicative_identity() {
+        one_multiplicative_identity_for::<DirectField>();
+        one_multiplicative_identity_for::<ExpLogField>();
+        one_multiplicative_identity_for::<TableField>();
+    }
+
+    fn mul_commutative_for<T: Field256 + Default>() {
+        let field = T::default();
         for i in 0..=255 {
             for j in 0..=255 {
                 assert_eq!(field.mul(i, j), field.mul(j, i));
@@ -148,24 +269,42 @@ mod tests {
     }
 
     #[test]
-    fn inv_closed() {
-        let field = DirectField::default();
+    fn mul_commutative() {
+        mul_commutative_for::<DirectField>();
+        mul_commutative_for::<ExpLogField>();
+        mul_commutative_for::<TableField>();
+    }
+
+    fn inv_closed_for<T: Field256 + Default>() {
+        let field = T::default();
         for i in 1..=255 {
-            assert!(field.inv(i) != DirectField::zero());
+            assert!(field.inv(i) != T::zero());
+        }
+    }
+
+    #[test]
+    fn inv_closed() {
+        inv_closed_for::<DirectField>();
+        inv_closed_for::<ExpLogField>();
+        inv_closed_for::<TableField>();
+    }
+
+    fn inv_identity_for<T: Field256 + Default>() {
+        let field = T::default();
+        for i in 1..=255 {
+            assert_eq!(field.mul(i, field.inv(i)), T::one());
         }
     }
 
     #[test]
     fn inv_identity() {
-        let field = DirectField::default();
-        for i in 1..=255 {
-            assert_eq!(field.mul(i, field.inv(i)), DirectField::one());
-        }
+        inv_identity_for::<DirectField>();
+        inv_identity_for::<ExpLogField>();
+        inv_identity_for::<TableField>();
     }
 
-    #[test]
-    fn mul_generator() {
-        let field = DirectField::default();
+    fn mul_generator_for<T: Field256 + Default>() {
+        let field = T::default();
         let mut exists: [bool; 256] = [false; 256];
         for i in 1..=255 {
             let x = field.exp(GENERATOR, i);
@@ -179,8 +318,14 @@ mod tests {
     }
 
     #[test]
-    fn mul_div_inverse() {
-        let field = DirectField::default();
+    fn mul_generator() {
+        mul_generator_for::<DirectField>();
+        mul_generator_for::<ExpLogField>();
+        mul_generator_for::<TableField>();
+    }
+
+    fn mul_div_inverse_for<T: Field256 + Default>() {
+        let field = T::default();
         for i in 1..=255 {
             for j in 1..=255 {
                 let z = field.mul(i, j);
@@ -188,5 +333,21 @@ mod tests {
                 assert_eq!(field.div(z, j), i);
             }
         }
+    }
+
+    #[test]
+    #[ignore]
+    fn mul_div_inverse_direct_field() {
+        mul_div_inverse_for::<DirectField>();
+    }
+
+    #[test]
+    fn mul_div_inverse_exp_log_field() {
+        mul_div_inverse_for::<ExpLogField>();
+    }
+
+    #[test]
+    fn mul_div_inverse_table_field() {
+        mul_div_inverse_for::<TableField>();
     }
 }
