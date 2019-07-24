@@ -16,7 +16,7 @@ const GENERATOR: u8 = 0b11;
 // 0 or 1. Thus, we can represent each polynomial with an 8 bit integer.
 //
 // The only function that must be implemented is mul(), but others can be implemented for speed.
-trait Field256 {
+pub trait Field256 {
     // Additive identity.
     fn zero() -> u8 {
         return 0;

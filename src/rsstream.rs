@@ -1,4 +1,5 @@
 use crate::encoding::Encoding;
+use crate::finite_field::{DirectField, ExpLogField, Field256};
 use crate::polynomial::Polynomial;
 use std::iter;
 use std::str::FromStr;
@@ -25,7 +26,7 @@ impl RSStream {
     }
 
     // Encode a stream of bytes as a list of 8 byte data chunks along with their code chunks.
-    pub fn encode_bytes(encoding: Encoding, bytes: &[u8]) -> RSStream {
+    pub fn encode_bytes<F: Field256>(encoding: Encoding, field: &F, bytes: &[u8]) -> RSStream {
         if bytes.len() == 0 {
             return RSStream::empty(encoding);
         }
@@ -54,7 +55,7 @@ impl RSStream {
             // let v = &input[start..end];
             let v: Vec<u8> = input.take(encoding.data_chunks as usize).collect();
             println!("Chunk: {:?}", v);
-            let p = Polynomial::interpolate(&v[..]);
+            let p = Polynomial::interpolate(&v[..], field);
             println!("Interpolated: {:?}", p);
             output.push(Vec::with_capacity(
                 (encoding.data_chunks + encoding.code_chunks) as usize,
@@ -62,8 +63,13 @@ impl RSStream {
 
             let chunks = encoding.data_chunks + encoding.code_chunks;
             for i in 0..chunks {
-                output[k].push(p.evaluate(i));
-                println!("k: {:?}, i: {:?}, value: {:?}", k, i, p.evaluate(i as u8));
+                output[k].push(p.evaluate(i, field));
+                println!(
+                    "k: {:?}, i: {:?}, value: {:?}",
+                    k,
+                    i,
+                    p.evaluate(i as u8, field)
+                );
             }
         }
 
@@ -76,7 +82,7 @@ impl RSStream {
         };
     }
 
-    pub fn decode_bytes(self: &Self) -> Result<Vec<u8>, &'static str> {
+    pub fn decode_bytes<F: Field256>(self: &Self, field: &F) -> Result<Vec<u8>, &'static str> {
         let RSStream {
             length,
             encoding,
@@ -121,10 +127,10 @@ impl RSStream {
                     .iter()
                     .map(|col| (*col as u8, codes[row][*col as usize]))
                     .collect();
-                let p = Polynomial::interpolate_points(&points[..]);
+                let p = Polynomial::interpolate_points(&points[..], field);
                 for col in 0..encoding.data_chunks {
                     let i = row * encoding.data_chunks as usize + col as usize;
-                    res.insert(i, p.evaluate(col as u8));
+                    res.insert(i, p.evaluate(col as u8, field));
                 }
             }
 
@@ -142,13 +148,15 @@ mod tests {
 
     #[test]
     fn encode_bytes_empty() {
+        let direct = DirectField::default();
         let encoding: Encoding = FromStr::from_str("rs=9.4").unwrap();
         let expected = RSStream::empty(encoding.clone());
-        assert_eq!(RSStream::encode_bytes(encoding, &[]), expected);
+        assert_eq!(RSStream::encode_bytes(encoding, &direct, &[]), expected);
     }
 
     #[test]
     fn encode_bytes_small() {
+        let direct = DirectField::default();
         let bytes = "DEADBEEF".as_bytes();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let expected = RSStream {
@@ -160,19 +168,21 @@ mod tests {
             ],
             erasures: vec![false, false, false, false, false, false],
         };
-        assert_eq!(RSStream::encode_bytes(encoding, &bytes), expected);
+        assert_eq!(RSStream::encode_bytes(encoding, &direct, &bytes), expected);
     }
 
     #[bench]
     fn encode_bytes_4k(b: &mut Bencher) {
+        let direct = ExpLogField::default();
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        b.iter(|| RSStream::encode_bytes(encoding, &bytes[..]));
+        b.iter(|| RSStream::encode_bytes(encoding, &direct, &bytes[..]));
     }
 
     #[test]
     fn decode_bytes_no_erasures() {
+        let direct = DirectField::default();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let input = RSStream {
             length: 8,
@@ -183,7 +193,7 @@ mod tests {
             ],
             erasures: vec![false, false, false, false, false, false],
         };
-        let res = input.decode_bytes();
+        let res = input.decode_bytes(&direct);
         assert!(res.is_ok());
         assert_eq!(
             res.unwrap(),
@@ -193,15 +203,17 @@ mod tests {
 
     #[bench]
     fn decode_bytes_no_erasures_4k(b: &mut Bencher) {
+        let direct = ExpLogField::default();
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let encoded = RSStream::encode_bytes(encoding, &bytes[..]);
-        b.iter(|| (&encoded).decode_bytes());
+        let encoded = RSStream::encode_bytes(encoding, &direct, &bytes[..]);
+        b.iter(|| (&encoded).decode_bytes(&direct));
     }
 
     #[test]
     fn decode_bytes_code_erasure() {
+        let direct = DirectField::default();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let input = RSStream {
             length: 8,
@@ -212,7 +224,7 @@ mod tests {
             ],
             erasures: vec![false, false, false, false, true, true],
         };
-        let res = input.decode_bytes();
+        let res = input.decode_bytes(&direct);
         assert!(res.is_ok());
         assert_eq!(
             res.expect("Got: "),
@@ -222,16 +234,18 @@ mod tests {
 
     #[bench]
     fn decode_bytes_code_erasures_4k(b: &mut Bencher) {
+        let direct = ExpLogField::default();
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let mut encoded = RSStream::encode_bytes(encoding, &bytes[..]);
+        let mut encoded = RSStream::encode_bytes(encoding, &direct, &bytes[..]);
         encoded.erasures = vec![false, false, false, false, true, true];
-        b.iter(|| (&encoded).decode_bytes());
+        b.iter(|| (&encoded).decode_bytes(&direct));
     }
 
     #[test]
     fn decode_bytes_data_erasure() {
+        let direct = DirectField::default();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let input = RSStream {
             length: 8,
@@ -242,7 +256,7 @@ mod tests {
             ],
             erasures: vec![true, false, true, false, false, false],
         };
-        let res = input.decode_bytes();
+        let res = input.decode_bytes(&direct);
         assert_eq!(
             res.expect("Got: "),
             vec![0x44, 0x45, 0x41, 0x44, 0x42, 0x45, 0x45, 0x46]
@@ -251,16 +265,18 @@ mod tests {
 
     #[bench]
     fn decode_bytes_data_erasures_4k(b: &mut Bencher) {
+        let direct = ExpLogField::default();
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let mut encoded = RSStream::encode_bytes(encoding, &bytes[..]);
+        let mut encoded = RSStream::encode_bytes(encoding, &direct, &bytes[..]);
         encoded.erasures = vec![true, false, true, false, false, false];
-        b.iter(|| (&encoded).decode_bytes());
+        b.iter(|| (&encoded).decode_bytes(&direct));
     }
 
     #[test]
     fn decode_bytes_too_many_erasures() {
+        let direct = DirectField::default();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let input = RSStream {
             length: 8,
@@ -271,17 +287,18 @@ mod tests {
             ],
             erasures: vec![true, true, true, false, false, false],
         };
-        let res = input.decode_bytes();
+        let res = input.decode_bytes(&direct);
         assert_eq!(res.is_err(), true);
     }
 
     #[bench]
     fn decode_bytes_too_many_erasures_4k(b: &mut Bencher) {
+        let direct = ExpLogField::default();
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let mut encoded = RSStream::encode_bytes(encoding, &bytes[..]);
+        let mut encoded = RSStream::encode_bytes(encoding, &direct, &bytes[..]);
         encoded.erasures = vec![true, true, true, false, false, false];
-        b.iter(|| (&encoded).decode_bytes());
+        b.iter(|| (&encoded).decode_bytes(&direct));
     }
 }
