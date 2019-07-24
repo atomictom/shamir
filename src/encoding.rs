@@ -1,7 +1,7 @@
 use std::result::Result;
 use std::str::FromStr;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Encoding {
     pub data_chunks: u8,
     pub code_chunks: u8,

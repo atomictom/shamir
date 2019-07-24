@@ -76,34 +76,33 @@ impl RSStream {
         };
     }
 
-    pub fn decode_bytes(self: Self) -> Result<Vec<u8>, &'static str> {
+    pub fn decode_bytes(self: &Self) -> Result<Vec<u8>, &'static str> {
         let RSStream {
             length,
             encoding,
             codes,
             erasures,
         } = self;
-        if length == 0 {
+        if *length == 0 {
             return Ok(Vec::new());
         }
         if erasures.iter().filter(|x| **x).map(|_x| 1).sum::<u8>() > encoding.code_chunks {
             return Err("Too many erasures to recover");
         }
 
+        let mut res = Vec::with_capacity(*length);
         if erasures
             .iter()
             .take(encoding.data_chunks as usize)
             .all(|x| !*x)
         {
-            let mut res = Vec::with_capacity(length);
-            for i in 0..length {
+            for i in 0..*length {
                 let row = i / encoding.data_chunks as usize;
                 let col = i % encoding.data_chunks as usize;
                 res.insert(i, codes[row][col]);
             }
             return Ok(res);
         } else {
-            let mut res = Vec::with_capacity(length);
             // First, figure out which indices are valid.
             let valid_indices: Vec<_> = erasures
                 .iter()
@@ -136,7 +135,10 @@ impl RSStream {
 
 #[cfg(test)]
 mod tests {
+    extern crate rand;
+    extern crate test;
     use super::*;
+    use test::Bencher;
 
     #[test]
     fn encode_bytes_empty() {
@@ -161,6 +163,14 @@ mod tests {
         assert_eq!(RSStream::encode_bytes(encoding, &bytes), expected);
     }
 
+    #[bench]
+    fn encode_bytes_4k(b: &mut Bencher) {
+        let kilobyte_4 = 4 << 10;
+        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        b.iter(|| RSStream::encode_bytes(encoding, &bytes[..]));
+    }
+
     #[test]
     fn decode_bytes_no_erasures() {
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
@@ -179,6 +189,15 @@ mod tests {
             res.unwrap(),
             vec![0x44, 0x45, 0x41, 0x44, 0x42, 0x45, 0x45, 0x46]
         );
+    }
+
+    #[bench]
+    fn decode_bytes_no_erasures_4k(b: &mut Bencher) {
+        let kilobyte_4 = 4 << 10;
+        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let encoded = RSStream::encode_bytes(encoding, &bytes[..]);
+        b.iter(|| (&encoded).decode_bytes());
     }
 
     #[test]
@@ -201,6 +220,16 @@ mod tests {
         );
     }
 
+    #[bench]
+    fn decode_bytes_code_erasures_4k(b: &mut Bencher) {
+        let kilobyte_4 = 4 << 10;
+        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let mut encoded = RSStream::encode_bytes(encoding, &bytes[..]);
+        encoded.erasures = vec![false, false, false, false, true, true];
+        b.iter(|| (&encoded).decode_bytes());
+    }
+
     #[test]
     fn decode_bytes_data_erasure() {
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
@@ -220,6 +249,16 @@ mod tests {
         );
     }
 
+    #[bench]
+    fn decode_bytes_data_erasures_4k(b: &mut Bencher) {
+        let kilobyte_4 = 4 << 10;
+        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let mut encoded = RSStream::encode_bytes(encoding, &bytes[..]);
+        encoded.erasures = vec![true, false, true, false, false, false];
+        b.iter(|| (&encoded).decode_bytes());
+    }
+
     #[test]
     fn decode_bytes_too_many_erasures() {
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
@@ -234,5 +273,15 @@ mod tests {
         };
         let res = input.decode_bytes();
         assert_eq!(res.is_err(), true);
+    }
+
+    #[bench]
+    fn decode_bytes_too_many_erasures_4k(b: &mut Bencher) {
+        let kilobyte_4 = 4 << 10;
+        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let mut encoded = RSStream::encode_bytes(encoding, &bytes[..]);
+        encoded.erasures = vec![true, true, true, false, false, false];
+        b.iter(|| (&encoded).decode_bytes());
     }
 }

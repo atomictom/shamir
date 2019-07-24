@@ -1,4 +1,4 @@
-use crate::finite_field::FiniteField256;
+use crate::finite_field::DirectField;
 use std::iter;
 use std::ops;
 
@@ -8,7 +8,7 @@ pub struct Polynomial {
     // Term coefficients for powers of x starting at 0 (i.e. coefficients[i] is for term cx^i).
     // The last element must always be non-zero. This allows us to efficiently compute the degree
     // from the length of this list without tracking it separately.
-    coefficients: Vec<FiniteField256>,
+    coefficients: Vec<u8>,
 }
 
 impl ops::Add for &Polynomial {
@@ -30,9 +30,9 @@ impl ops::Add for &Polynomial {
         let new_coefficients: Vec<_> = shorter
             .into_iter()
             .cloned()
-            .chain(iter::repeat(FiniteField256::zero()))
+            .chain(iter::repeat(DirectField::zero()))
             .zip(longer)
-            .map(|(x, y)| &x + y)
+            .map(|(x, y)| x + *y)
             .collect();
         return Polynomial::from_coefficients(&new_coefficients);
     }
@@ -65,7 +65,7 @@ impl ops::Mul for &Polynomial {
             for (e2, c2) in other.coefficients.iter().enumerate() {
                 let e = e1 + e2;
                 let c = c1 * c2;
-                new_coefficients[e] = &new_coefficients[e] + &c;
+                new_coefficients[e] = new_coefficients[e] + c;
             }
         }
 
@@ -102,12 +102,6 @@ impl Polynomial {
         }
     }
 
-    pub fn from_coefficients(coefficients: &[FiniteField256]) -> Self {
-        Polynomial {
-            coefficients: Vec::from(coefficients),
-        }
-    }
-
     // Computes a single term Polynomial P such that P(i) == values[i].
     pub fn single_term(points: &[(u8, u8)], (xi, yi): (u8, u8)) -> Self {
         if points.len() == 0 {
@@ -129,9 +123,9 @@ impl Polynomial {
             //   (xi - xj)
             let xj = FiniteField256::from_byte(*xj);
             let xi = FiniteField256::from_byte(xi);
-            let denominator = &xi - &xj;
-            let zeroth_term = &xj / &denominator;
-            let first_term = &FiniteField256::one() / &denominator;
+            let denominator = xi - xj;
+            let zeroth_term = xj / denominator;
+            let first_term = FiniteField256::one() / denominator;
             let p = Self::from_coefficients(&[zeroth_term, first_term]);
             // println!("Constructing subterm xi: {:?}, xj: {:?}, denominator: {:?}, zeroth_term: {:?}, first_term: {:?}, p: {:?}", xi, xj, denominator, zeroth_term, first_term, p.clone());
 
@@ -164,7 +158,7 @@ impl Polynomial {
         return points
             .iter()
             .map(|p| Self::single_term(points, *p))
-            .fold(Self::zero(), |x, y| &x + &y);
+            .fold(Self::zero(), |x, y| x + y);
     }
 
     // Returns the degree of the Polynomial which is defined as -1 for the zero Polynomial and the
@@ -182,7 +176,7 @@ impl Polynomial {
     pub fn evaluate(self: &Self, x: u8) -> u8 {
         let mut result: FiniteField256 = FiniteField256::zero();
         for (e, c) in self.coefficients.iter().enumerate() {
-            result = result + (&FiniteField256::from_byte(x).pow(e as u32) * c);
+            result = result + (FiniteField256::from_byte(x).pow(e as u8) * *c);
         }
 
         return result.to_byte();
