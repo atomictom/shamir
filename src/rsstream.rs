@@ -1,8 +1,7 @@
 use crate::encoding::Encoding;
-use crate::finite_field::{DirectField, ExpLogField, Field256};
+use crate::finite_field::Field256;
 use crate::polynomial::Polynomial;
 use std::iter;
-use std::str::FromStr;
 
 // Reed-Solomon encoded data. Length is used to discard padding bytes added to make the number of
 // bytes (u8s) in codes a multiple of the encoding data chunks.
@@ -24,9 +23,20 @@ impl RSStream {
             erasures: Vec::new(),
         }
     }
+}
 
+pub trait RSEncoder {
+    fn encode_bytes<F: Field256>(encoding: Encoding, field: &F, bytes: &[u8]) -> RSStream;
+    fn decode_bytes<F: Field256>(stream: &RSStream, field: &F) -> Result<Vec<u8>, String>;
+}
+
+// Encoder using lagrangian interpolation to construct Polynomials given a set of points. Slow.
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+pub struct LagrangeInterpolationEncoder;
+
+impl RSEncoder for LagrangeInterpolationEncoder {
     // Encode a stream of bytes as a list of 8 byte data chunks along with their code chunks.
-    pub fn encode_bytes<F: Field256>(encoding: Encoding, field: &F, bytes: &[u8]) -> RSStream {
+    fn encode_bytes<F: Field256>(encoding: Encoding, field: &F, bytes: &[u8]) -> RSStream {
         if bytes.len() == 0 {
             return RSStream::empty(encoding);
         }
@@ -82,18 +92,18 @@ impl RSStream {
         };
     }
 
-    pub fn decode_bytes<F: Field256>(self: &Self, field: &F) -> Result<Vec<u8>, &'static str> {
+    fn decode_bytes<F: Field256>(stream: &RSStream, field: &F) -> Result<Vec<u8>, String> {
         let RSStream {
             length,
             encoding,
             codes,
             erasures,
-        } = self;
+        } = stream;
         if *length == 0 {
             return Ok(Vec::new());
         }
         if erasures.iter().filter(|x| **x).map(|_x| 1).sum::<u8>() > encoding.code_chunks {
-            return Err("Too many erasures to recover");
+            return Err(String::from("Too many erasures to recover"));
         }
 
         let mut res = Vec::with_capacity(*length);
@@ -105,7 +115,7 @@ impl RSStream {
             for i in 0..*length {
                 let row = i / encoding.data_chunks as usize;
                 let col = i % encoding.data_chunks as usize;
-                res.insert(i, codes[row][col]);
+                res.push(codes[row][col]);
             }
             return Ok(res);
         } else {
@@ -139,11 +149,19 @@ impl RSStream {
     }
 }
 
+// Encoder using Vandermonde matrices to do polynomial interpolation.
+pub struct VandermondeEncoder {
+    matrix: Vec<Vec<u8>>,
+}
+
 #[cfg(test)]
 mod tests {
     extern crate rand;
     extern crate test;
     use super::*;
+    // TODO: Consider using Criterion
+    use crate::finite_field::{DirectField, ExpLogField};
+    use std::str::FromStr;
     use test::Bencher;
 
     #[test]
@@ -151,7 +169,10 @@ mod tests {
         let direct = DirectField::default();
         let encoding: Encoding = FromStr::from_str("rs=9.4").unwrap();
         let expected = RSStream::empty(encoding.clone());
-        assert_eq!(RSStream::encode_bytes(encoding, &direct, &[]), expected);
+        assert_eq!(
+            LagrangeInterpolationEncoder::encode_bytes(encoding, &direct, &[]),
+            expected
+        );
     }
 
     #[test]
@@ -168,7 +189,10 @@ mod tests {
             ],
             erasures: vec![false, false, false, false, false, false],
         };
-        assert_eq!(RSStream::encode_bytes(encoding, &direct, &bytes), expected);
+        assert_eq!(
+            LagrangeInterpolationEncoder::encode_bytes(encoding, &direct, &bytes),
+            expected
+        );
     }
 
     #[bench]
@@ -177,7 +201,7 @@ mod tests {
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        b.iter(|| RSStream::encode_bytes(encoding, &direct, &bytes[..]));
+        b.iter(|| LagrangeInterpolationEncoder::encode_bytes(encoding, &direct, &bytes[..]));
     }
 
     #[test]
@@ -193,7 +217,7 @@ mod tests {
             ],
             erasures: vec![false, false, false, false, false, false],
         };
-        let res = input.decode_bytes(&direct);
+        let res = LagrangeInterpolationEncoder::decode_bytes(&input, &direct);
         assert!(res.is_ok());
         assert_eq!(
             res.unwrap(),
@@ -207,8 +231,8 @@ mod tests {
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let encoded = RSStream::encode_bytes(encoding, &direct, &bytes[..]);
-        b.iter(|| (&encoded).decode_bytes(&direct));
+        let encoded = LagrangeInterpolationEncoder::encode_bytes(encoding, &direct, &bytes[..]);
+        b.iter(|| LagrangeInterpolationEncoder::decode_bytes(&encoded, &direct));
     }
 
     #[test]
@@ -224,7 +248,7 @@ mod tests {
             ],
             erasures: vec![false, false, false, false, true, true],
         };
-        let res = input.decode_bytes(&direct);
+        let res = LagrangeInterpolationEncoder::decode_bytes(&input, &direct);
         assert!(res.is_ok());
         assert_eq!(
             res.expect("Got: "),
@@ -238,9 +262,9 @@ mod tests {
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let mut encoded = RSStream::encode_bytes(encoding, &direct, &bytes[..]);
+        let mut encoded = LagrangeInterpolationEncoder::encode_bytes(encoding, &direct, &bytes[..]);
         encoded.erasures = vec![false, false, false, false, true, true];
-        b.iter(|| (&encoded).decode_bytes(&direct));
+        b.iter(|| LagrangeInterpolationEncoder::decode_bytes(&encoded, &direct));
     }
 
     #[test]
@@ -256,7 +280,7 @@ mod tests {
             ],
             erasures: vec![true, false, true, false, false, false],
         };
-        let res = input.decode_bytes(&direct);
+        let res = LagrangeInterpolationEncoder::decode_bytes(&input, &direct);
         assert_eq!(
             res.expect("Got: "),
             vec![0x44, 0x45, 0x41, 0x44, 0x42, 0x45, 0x45, 0x46]
@@ -269,9 +293,9 @@ mod tests {
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let mut encoded = RSStream::encode_bytes(encoding, &direct, &bytes[..]);
+        let mut encoded = LagrangeInterpolationEncoder::encode_bytes(encoding, &direct, &bytes[..]);
         encoded.erasures = vec![true, false, true, false, false, false];
-        b.iter(|| (&encoded).decode_bytes(&direct));
+        b.iter(|| LagrangeInterpolationEncoder::decode_bytes(&encoded, &direct));
     }
 
     #[test]
@@ -287,7 +311,7 @@ mod tests {
             ],
             erasures: vec![true, true, true, false, false, false],
         };
-        let res = input.decode_bytes(&direct);
+        let res = LagrangeInterpolationEncoder::decode_bytes(&input, &direct);
         assert_eq!(res.is_err(), true);
     }
 
@@ -297,8 +321,8 @@ mod tests {
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let mut encoded = RSStream::encode_bytes(encoding, &direct, &bytes[..]);
+        let mut encoded = LagrangeInterpolationEncoder::encode_bytes(encoding, &direct, &bytes[..]);
         encoded.erasures = vec![true, true, true, false, false, false];
-        b.iter(|| (&encoded).decode_bytes(&direct));
+        b.iter(|| LagrangeInterpolationEncoder::decode_bytes(&encoded, &direct));
     }
 }

@@ -81,6 +81,7 @@ pub trait Field256 {
 pub struct DirectField;
 
 impl Field256 for DirectField {
+    // TODO: Use CLMUL or similar intrinsics with std::arch.
     fn mul(&self, x: u8, y: u8) -> u8 {
         let mut result = Self::zero();
         let mut a = x;
@@ -110,6 +111,8 @@ pub struct ExpLogField {
 
 impl default::Default for ExpLogField {
     fn default() -> Self {
+        // TODO: Consider using e.g. lazy_static! to initialize the tables once and have all
+        // implementations refer to them.
         let direct = DirectField::default();
         let mut x = Self::one();
         let mut res = Self {
@@ -174,6 +177,8 @@ pub struct TableField {
 
 impl default::Default for TableField {
     fn default() -> Self {
+        // TODO: Consider using e.g. lazy_static! to initialize the tables once and have all
+        // implementations refer to them.
         let direct = DirectField::default();
         let mut res = Self {
             inv: [0; 256],
