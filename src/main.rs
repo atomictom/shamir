@@ -2,6 +2,7 @@
 
 mod encoding;
 mod finite_field;
+mod matrix;
 mod polynomial;
 mod rsstream;
 
@@ -10,6 +11,13 @@ use finite_field::DirectField;
 use rsstream::LagrangeInterpolationEncoder;
 use rsstream::RSEncoder;
 use std::str::FromStr;
+
+// TODO:
+//
+// 1. Implement fast direct inverses used the extended euclidean algorithm.
+// 2. Implement interpolation via Vandermonde matrices.
+// 3. Implement interpolation via Cauchy matrices.
+// 4. Implement architecture-specific improvements.
 
 fn main() {
     let string = "Test string";

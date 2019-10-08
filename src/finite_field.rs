@@ -334,7 +334,22 @@ mod tests {
         for i in 1..=255 {
             for j in 1..=255 {
                 let z = field.mul(i, j);
+                println!("{:?} * {:?} = {:?}", i, j, z);
+                println!(
+                    "Expected: {:?} / {:?} = {:?}, Actual: = {:?}",
+                    z,
+                    i,
+                    j,
+                    field.div(z, i)
+                );
                 assert_eq!(field.div(z, i), j);
+                println!(
+                    "Expected: {:?} / {:?} = {:?}, Actual: = {:?}",
+                    z,
+                    i,
+                    j,
+                    field.div(z, j)
+                );
                 assert_eq!(field.div(z, j), i);
             }
         }

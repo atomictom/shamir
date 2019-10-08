@@ -154,6 +154,61 @@ pub struct VandermondeEncoder {
     matrix: Vec<Vec<u8>>,
 }
 
+// rs=3.2
+//
+// [1 0 0]         [A]
+// [0 1 0]   [A]   [B]
+// [0 0 1] * [B] = [C]
+// [? ? ?]   [C]   [X]
+// [? ? ?]         [Z]
+//
+//         [1 0 0]^-1     [A]
+//  [A]   ([0 1 0])      ([B])
+//  [B] =  [0 0 1]     *  [C]
+//  [C]    [? ? ?]        [X]
+//        ([? ? ?])      ([Z])
+//
+// 1 0 0     C0
+// 1 1 1  *  C1
+// 1 2 4     C2
+// 1 3 9
+//
+// i0^2 + j0^1 + k0^0 = a
+// i1^2 + j1^1 + k1^0 = b
+// i2^2 + j2^1 + k2^0 = c
+//
+//   5*3      3*1   5*1
+// [1 0  0]         [a]
+// [1 1  1]   [i]   [b]
+// [1 2  4] * [j] = [c]
+// [1 3  9]   [k]   [x]
+// [1 4 16]         [y]
+//
+// 3*1   5*1   5*3
+//       [a]   [1 0  0]^-1
+// [i]   [b]   [1 1  1]
+// [j] = [c] * [1 2  4]
+// [k]   [x]   [1 3  9]
+//       [y]   [1 4 16]
+//
+//
+// CX = P
+// C = D * X^-1
+impl VandermondeEncoder {
+    // Generates a new Vandermonde matrix to be used with a given encoding and inverts it. The
+    // result is multiplied by the input data points to generate the polynomial coefficients that
+    // would generate those points.
+    pub fn new(encoding: Encoding) {}
+}
+
+// impl RSEncoder for VandermondeEncoder {
+//     fn encode_bytes<F: Field256>(encoding: Encoding, field: &F, bytes: &[u8]) -> RSStream {
+//     }
+//     j
+//     fn decode_bytes<F: Field256>(stream: &RSStream, field: &F) -> Result<Vec<u8>, String> {
+//     }
+// }
+
 #[cfg(test)]
 mod tests {
     extern crate rand;
