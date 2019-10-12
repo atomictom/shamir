@@ -150,9 +150,9 @@ impl RSEncoder for LagrangeInterpolationEncoder {
 }
 
 // Encoder using Vandermonde matrices to do polynomial interpolation.
-pub struct VandermondeEncoder {
-    matrix: Vec<Vec<u8>>,
-}
+// pub struct VandermondeEncoder {
+//     matrix: Vec<Vec<u8>>,
+// }
 
 // rs=3.2
 //
@@ -194,12 +194,12 @@ pub struct VandermondeEncoder {
 //
 // CX = P
 // C = D * X^-1
-impl VandermondeEncoder {
-    // Generates a new Vandermonde matrix to be used with a given encoding and inverts it. The
-    // result is multiplied by the input data points to generate the polynomial coefficients that
-    // would generate those points.
-    pub fn new(encoding: Encoding) {}
-}
+// impl VandermondeEncoder {
+//     // Generates a new Vandermonde matrix to be used with a given encoding and inverts it. The
+//     // result is multiplied by the input data points to generate the polynomial coefficients that
+//     // would generate those points.
+//     pub fn new()encoding: Encoding) {}
+// }
 
 // impl RSEncoder for VandermondeEncoder {
 //     fn encode_bytes<F: Field256>(encoding: Encoding, field: &F, bytes: &[u8]) -> RSStream {
