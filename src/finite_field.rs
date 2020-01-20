@@ -76,6 +76,24 @@ pub trait Field256 {
     }
 }
 
+// Fake Field implementation that does normal integer arithmetic, but inv() is not well defined.
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+pub struct Ring;
+impl Field256 for Ring {
+    fn add(x: u8, y: u8) -> u8 {
+        return x + y;
+    }
+    fn sub(x: u8, y: u8) -> u8 {
+        return x - y;
+    }
+    fn neg(x: u8) -> u8 {
+        return Self::sub(0, x);
+    }
+    fn mul(&self, x: u8, y: u8) -> u8 {
+        return x * y;
+    }
+}
+
 // Field implementation that does computations directly.
 #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
 pub struct DirectField;

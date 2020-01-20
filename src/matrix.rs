@@ -1,11 +1,28 @@
+use crate::finite_field::{DirectField, Field256, Ring};
 use std::convert::TryFrom;
+use std::fmt::Display;
 use std::iter;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Matrix {
     rows: usize,
     cols: usize,
     mat: Vec<Vec<u8>>,
+}
+
+impl Display for Matrix {
+    fn fmt(self: &Self, formatter: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        for i in 0..self.rows {
+            formatter.write_str("\n");
+            for j in 0..self.cols {
+                if j > 0 {
+                    formatter.write_str(" ");
+                }
+                formatter.write_str(format!("{}", self.mat[i][j]).as_str());
+            }
+        }
+        return Ok(());
+    }
 }
 
 impl TryFrom<&[&[u8]]> for Matrix {
@@ -57,7 +74,7 @@ impl Matrix {
         };
     }
 
-    pub fn mul(self: &Self, other: &Self) -> Matrix {
+    pub fn mul<F: Field256>(self: &Self, other: &Self, field: &F) -> Matrix {
         assert!(self.cols == other.rows);
         let mut res = Matrix::zero(self.rows, other.cols);
         // Set each element of the matrix
@@ -65,7 +82,8 @@ impl Matrix {
             for j in 0..res.cols {
                 // Calculate a matrix element
                 for k in 0..self.cols {
-                    res.mat[i][j] += self.mat[i][k] * other.mat[k][j]
+                    res.mat[i][j] =
+                        F::add(res.mat[i][j], field.mul(self.mat[i][k], other.mat[k][j]));
                 }
             }
         }
@@ -79,18 +97,84 @@ impl Matrix {
         return self;
     }
 
-    fn scale_row(self: &mut Self, row: usize, scale: u8) -> &mut Self {
+    fn scale_row<F: Field256>(self: &mut Self, row: usize, scale: u8, field: &F) -> &mut Self {
+        for i in 0..self.cols {
+            self.mat[row][i] = field.mul(self.mat[row][i], scale);
+        }
         return self;
     }
 
-    fn add_scaled_row(self: &mut Self, from_row: usize, to_row: usize, scale: u8) -> &mut Self {
+    fn add_scaled_row<F: Field256>(
+        self: &mut Self,
+        from_row: usize,
+        to_row: usize,
+        scale: u8,
+        field: &F,
+    ) -> &mut Self {
+        for i in 0..self.cols {
+            self.mat[to_row][i] =
+                F::add(self.mat[to_row][i], field.mul(self.mat[from_row][i], scale));
+        }
         return self;
     }
 
-    fn augment(self: &Self)
-
-    pub fn invert(self: &mut Self) -> Matrix {
+    fn augment(self: &mut Self) -> &mut Self {
+        for i in 0..self.rows {
+            for j in 0..self.cols {
+                self.mat[i].push(if i == j { 1 } else { 0 });
+            }
+        }
+        self.cols *= 2;
         return self;
+    }
+
+    pub fn invert<F: Field256>(self: &Self, field: &F) -> Result<Self, &'static str> {
+        let mut res = self.clone();
+        res.augment();
+
+        // Upper triangular reduction
+        for i in 0..self.rows {
+            // Swap rows, if necessary.
+            for j in i..self.rows {
+                if self.mat[j][i] != 0 {
+                    res.swap_row(i, j);
+                    break;
+                }
+            }
+            // If swapping rows did not find a row without a 0 in the row and column we're
+            // operating on then the matrix must not be invertable.
+            if res.mat[i][i] == 0 {
+                return Err("The matrix is singular and cannot be inverted.");
+            }
+            if res.mat[i][i] != 1 {
+                res.scale_row(i, field.inv(res.mat[i][i]), field);
+            }
+            for j in (i + 1)..self.rows {
+                if res.mat[j][i] != 0 {
+                    res.add_scaled_row(i, j, res.mat[j][i], field);
+                }
+            }
+        }
+
+        // Lower triangular reduction
+        for i in (0..self.rows).rev() {
+            for j in 0..i {
+                res.add_scaled_row(i, j, res.mat[j][i], field);
+            }
+        }
+
+        let mut ret_mat = Vec::with_capacity(res.rows);
+        for i in 0..self.rows {
+            ret_mat.push(Vec::with_capacity(res.cols));
+            for j in 0..self.cols {
+                ret_mat[i].push(res.mat[i][j + self.cols]);
+            }
+        }
+        return Ok(Matrix {
+            rows: self.rows,
+            cols: self.cols,
+            mat: ret_mat,
+        });
     }
 }
 
@@ -117,10 +201,37 @@ mod tests {
     }
 
     #[test]
+    fn invert_identity_is_identity() {
+        let direct = DirectField::default();
+        let id = Matrix::identity(5);
+        let inv = id.invert(&direct).unwrap();
+        assert_eq!(id, inv);
+    }
+
+    #[test]
+    fn mat_mul_by_inv_is_identity() {
+        let direct = DirectField::default();
+
+        let a = Matrix::try_from(
+            &[
+                &[1u8, 2u8, 3u8][..],
+                &[4u8, 5u8, 6u8][..],
+                &[5u8, 6u8, 7u8][..],
+            ][..],
+        )
+        .unwrap();
+        let a_inv = a.invert(&direct).unwrap();
+        assert_eq!(a.mul(&a_inv, &direct), Matrix::identity(3));
+    }
+
+    #[test]
     fn mul_simple() {
+        // This gives us "normal" multiplication, but inv/div is broken. That's okay for this test
+        // and it makes it easier to verify the multiplication works right.
+        let ring = Ring::default();
         let a = Matrix::try_from(&[&[1u8, 2u8, 3u8][..], &[4u8, 5u8, 6u8][..]][..]).unwrap();
         let b = Matrix::try_from(&[&[1u8, 2u8][..], &[1u8, 2u8][..], &[1u8, 2u8][..]][..]).unwrap();
-        let res = a.mul(&b);
+        let res = a.mul(&b, &ring);
         assert_eq!(res.mat[0][0], 6);
         assert_eq!(res.mat[0][1], 12);
         assert_eq!(res.mat[1][0], 15);
@@ -129,8 +240,9 @@ mod tests {
 
     #[test]
     fn mul_id() {
+        let direct = DirectField::default();
         let m = Matrix::try_from(&[&[1u8, 2u8][..], &[3u8, 4u8][..], &[5u8, 6u8][..]][..]).unwrap();
-        assert_eq!(Matrix::identity(3).mul(&m), m);
-        assert_eq!(m.mul(&Matrix::identity(2)), m);
+        assert_eq!(Matrix::identity(3).mul(&m, &direct), m);
+        assert_eq!(m.mul(&Matrix::identity(2), &direct), m);
     }
 }
