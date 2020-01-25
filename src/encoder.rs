@@ -1,6 +1,9 @@
+use crate::chunker::ChunkerExt;
 use crate::encoding::Encoding;
 use crate::finite_field::Field256;
+use crate::matrix::Matrix;
 use crate::polynomial::Polynomial;
+use std::convert::TryFrom;
 use std::iter;
 
 // Reed-Solomon encoded data. Length is used to discard padding bytes added to make the number of
@@ -41,38 +44,30 @@ impl RSEncoder for LagrangeInterpolationEncoder {
             return RSStream::empty(encoding);
         }
 
-        // The number of stripes
+        // The number of chunks.
         let iterations = bytes.len() / encoding.data_chunks as usize;
-        // Pad out the input vector if it is not a multiple of the encoding's data chunk length so
-        // that we have enough data to form a polynomial.
-        let padding = encoding.data_chunks - (bytes.len() % (encoding.data_chunks as usize)) as u8;
-        // let input: Vec<u8> = bytes
-        //     .into_iter()
-        //     .cloned()
-        //     .chain(iter::repeat(0u8).take(padding as usize))
-        //     .collect();
-        let input = &mut bytes
-            .into_iter()
-            .cloned()
-            .chain(iter::repeat(0u8).take(padding as usize));
 
         // Generate our interpolated polynomial where P(i) for i from 0..encoding.data_chunks ==
         // input[i * k] (where k is the iteration of bytes we are encoding).
         let mut output: Vec<Vec<u8>> = Vec::with_capacity(iterations);
-        for k in 0..iterations {
+        for (k, chunk) in bytes
+            .iter()
+            .cloned()
+            .chunked_with_default(encoding.data_chunks as usize, 0)
+            .enumerate()
+        {
             // let start = k * encoding.data_chunks as usize;
             // let end = start + encoding.data_chunks as usize;
             // let v = &input[start..end];
-            let v: Vec<u8> = input.take(encoding.data_chunks as usize).collect();
-            println!("Chunk: {:?}", v);
-            let p = Polynomial::interpolate(&v[..], field);
+            println!("Chunk: {:?}", chunk);
+            let p = Polynomial::interpolate(&chunk[..], field);
             println!("Interpolated: {:?}", p);
             output.push(Vec::with_capacity(
                 (encoding.data_chunks + encoding.code_chunks) as usize,
             ));
 
-            let chunks = encoding.data_chunks + encoding.code_chunks;
-            for i in 0..chunks {
+            let encoded_bytes = encoding.data_chunks + encoding.code_chunks;
+            for i in 0..encoded_bytes {
                 output[k].push(p.evaluate(i, field));
                 println!(
                     "k: {:?}, i: {:?}, value: {:?}",
@@ -149,11 +144,6 @@ impl RSEncoder for LagrangeInterpolationEncoder {
     }
 }
 
-// Encoder using Vandermonde matrices to do polynomial interpolation.
-// pub struct VandermondeEncoder {
-//     matrix: Vec<Vec<u8>>,
-// }
-
 // rs=3.2
 //
 // [1 0 0]         [A]
@@ -194,15 +184,50 @@ impl RSEncoder for LagrangeInterpolationEncoder {
 //
 // CX = P
 // C = D * X^-1
-// impl VandermondeEncoder {
-//     // Generates a new Vandermonde matrix to be used with a given encoding and inverts it. The
-//     // result is multiplied by the input data points to generate the polynomial coefficients that
-//     // would generate those points.
-//     pub fn new()encoding: Encoding) {}
-// }
+
+// Encoder using Vandermonde matrices to do polynomial interpolation.
+pub struct VandermondeEncoder {
+    matrix: Matrix,
+}
+
+impl VandermondeEncoder {
+    // Generates a new Vandermonde matrix to be used with a given encoding and inverts it. The
+    // result will be multiplied by the input data points to generate the polynomial coefficients
+    // that would generate those points.
+    pub fn new<F: Field256>(encoding: Encoding, field: F) -> Result<VandermondeEncoder, String> {
+        let mut vandermonde: Vec<Vec<u8>> = Vec::with_capacity(encoding.data_chunks as usize);
+        for i in 0..encoding.data_chunks {
+            let mut row = Vec::with_capacity(encoding.data_chunks as usize);
+            for j in 0..encoding.data_chunks {
+                row.push(field.exp(i, j));
+            }
+            vandermonde.push(row);
+        }
+
+        let maybe_matrix: Result<Matrix, &'static str> = Matrix::try_from(vandermonde);
+        if maybe_matrix.is_err() {
+            return Err(format!(
+                "Could not create vandermonde matrix: {}",
+                maybe_matrix.unwrap_err()
+            ));
+        }
+
+        let maybe_inverted = maybe_matrix.unwrap().invert(&field);
+        if maybe_inverted.is_err() {
+            return Err(format!(
+                "Could not invert vandermonde matrix: {}",
+                maybe_inverted.unwrap_err()
+            ));
+        }
+        return Ok(VandermondeEncoder {
+            matrix: maybe_inverted.unwrap(),
+        });
+    }
+}
 
 // impl RSEncoder for VandermondeEncoder {
 //     fn encode_bytes<F: Field256>(encoding: Encoding, field: &F, bytes: &[u8]) -> RSStream {
+//
 //     }
 //     j
 //     fn decode_bytes<F: Field256>(stream: &RSStream, field: &F) -> Result<Vec<u8>, String> {

@@ -50,6 +50,31 @@ impl TryFrom<&[&[u8]]> for Matrix {
     }
 }
 
+impl TryFrom<Vec<Vec<u8>>> for Matrix {
+    type Error = &'static str;
+
+    fn try_from(elems: Vec<Vec<u8>>) -> Result<Self, Self::Error> {
+        let rows = elems.len();
+        if rows <= 0 {
+            return Err("Cannot have a matrix with 0 rows");
+        }
+        let cols = elems[0].len();
+        if cols <= 0 {
+            return Err("Cannot have a matrix with 0 cols");
+        }
+
+        let mut res = Matrix::zero(rows, cols);
+
+        for (i, r) in elems.iter().enumerate() {
+            for (j, c) in r.iter().enumerate() {
+                res.mat[i][j] = *c;
+            }
+        }
+
+        return Ok(res);
+    }
+}
+
 impl Matrix {
     pub fn zero(rows: usize, cols: usize) -> Matrix {
         let row: Vec<u8> = iter::repeat(0).take(cols).collect();

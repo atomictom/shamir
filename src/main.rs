@@ -1,10 +1,11 @@
 #![feature(test)]
 
+mod chunker;
+mod encoder;
 mod encoding;
 mod finite_field;
 mod matrix;
 mod polynomial;
-mod rsstream;
 
 use encoding::Encoding;
 use finite_field::DirectField;
