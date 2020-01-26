@@ -6,14 +6,17 @@ use crate::polynomial::Polynomial;
 use std::convert::TryFrom;
 use std::iter;
 
-// Reed-Solomon encoded data. Length is used to discard padding bytes added to make the number of
-// bytes (u8s) in codes a multiple of the encoding data chunks.
+// Reed-Solomon encoded data.
 #[derive(Debug, PartialEq)]
 pub struct RSStream {
+    // Length is used to discard padding bytes added to make the number of
+    // bytes (u8s) in codes a multiple of the encoding data chunks.
     pub length: usize,
+    // How the reed-solomon data has been encoded.
     pub encoding: Encoding,
     pub codes: Vec<Vec<u8>>,
-    // True for [i] if there was an erasure in codes[i].
+    // True for [i] if there was an erasure in codes[*][i]. Can be empty if there is no erasure
+    // data.
     pub erasures: Vec<bool>,
 }
 
@@ -29,8 +32,13 @@ impl RSStream {
 }
 
 pub trait RSEncoder {
-    fn encode_bytes<F: Field256>(encoding: Encoding, field: &F, bytes: &[u8]) -> RSStream;
-    fn decode_bytes<F: Field256>(stream: &RSStream, field: &F) -> Result<Vec<u8>, String>;
+    fn encode_bytes<F: Field256>(
+        &self,
+        encoding: Encoding,
+        field: &F,
+        bytes: &[u8],
+    ) -> Result<RSStream, String>;
+    fn decode_bytes<F: Field256>(&self, stream: &RSStream, field: &F) -> Result<Vec<u8>, String>;
 }
 
 // Encoder using lagrangian interpolation to construct Polynomials given a set of points. Slow.
@@ -39,9 +47,14 @@ pub struct LagrangeInterpolationEncoder;
 
 impl RSEncoder for LagrangeInterpolationEncoder {
     // Encode a stream of bytes as a list of 8 byte data chunks along with their code chunks.
-    fn encode_bytes<F: Field256>(encoding: Encoding, field: &F, bytes: &[u8]) -> RSStream {
+    fn encode_bytes<F: Field256>(
+        &self,
+        encoding: Encoding,
+        field: &F,
+        bytes: &[u8],
+    ) -> Result<RSStream, String> {
         if bytes.len() == 0 {
-            return RSStream::empty(encoding);
+            return Ok(RSStream::empty(encoding));
         }
 
         // The number of chunks.
@@ -50,44 +63,34 @@ impl RSEncoder for LagrangeInterpolationEncoder {
         // Generate our interpolated polynomial where P(i) for i from 0..encoding.data_chunks ==
         // input[i * k] (where k is the iteration of bytes we are encoding).
         let mut output: Vec<Vec<u8>> = Vec::with_capacity(iterations);
-        for (k, chunk) in bytes
+        for (i, chunk) in bytes
             .iter()
             .cloned()
             .chunked_with_default(encoding.data_chunks as usize, 0)
             .enumerate()
         {
-            // let start = k * encoding.data_chunks as usize;
-            // let end = start + encoding.data_chunks as usize;
-            // let v = &input[start..end];
-            println!("Chunk: {:?}", chunk);
             let p = Polynomial::interpolate(&chunk[..], field);
-            println!("Interpolated: {:?}", p);
-            output.push(Vec::with_capacity(
-                (encoding.data_chunks + encoding.code_chunks) as usize,
-            ));
+            output.push(Vec::with_capacity(encoding.total_chunks() as usize));
 
-            let encoded_bytes = encoding.data_chunks + encoding.code_chunks;
-            for i in 0..encoded_bytes {
-                output[k].push(p.evaluate(i, field));
-                println!(
-                    "k: {:?}, i: {:?}, value: {:?}",
-                    k,
-                    i,
-                    p.evaluate(i as u8, field)
-                );
+            for b in 0..encoding.total_chunks() {
+                // Only evaluate the polynomial for code chunks.
+                if b < encoding.data_chunks {
+                    output[i].push(chunk[b as usize]);
+                } else {
+                    output[i].push(p.evaluate(b, field));
+                }
             }
         }
 
-        let total_chunks = encoding.total_chunks();
-        return RSStream {
+        return Ok(RSStream {
             length: bytes.len(),
             encoding: encoding,
             codes: output,
-            erasures: iter::repeat(false).take(total_chunks).collect(),
-        };
+            erasures: Vec::new(),
+        });
     }
 
-    fn decode_bytes<F: Field256>(stream: &RSStream, field: &F) -> Result<Vec<u8>, String> {
+    fn decode_bytes<F: Field256>(&self, stream: &RSStream, field: &F) -> Result<Vec<u8>, String> {
         let RSStream {
             length,
             encoding,
@@ -186,15 +189,20 @@ impl RSEncoder for LagrangeInterpolationEncoder {
 // C = D * X^-1
 
 // Encoder using Vandermonde matrices to do polynomial interpolation.
+#[derive(Debug, Clone)]
 pub struct VandermondeEncoder {
-    matrix: Matrix,
+    // The inverted vandermonde matrix used to compute polynomial coefficients given a set of data
+    // points.
+    inverted: Matrix,
+    // A Vandermonde matrix for generating the code points with the polynomial coefficients.
+    code_vandermonde: Matrix,
 }
 
 impl VandermondeEncoder {
     // Generates a new Vandermonde matrix to be used with a given encoding and inverts it. The
     // result will be multiplied by the input data points to generate the polynomial coefficients
     // that would generate those points.
-    pub fn new<F: Field256>(encoding: Encoding, field: F) -> Result<VandermondeEncoder, String> {
+    pub fn new<F: Field256>(encoding: &Encoding, field: &F) -> Result<VandermondeEncoder, String> {
         let mut vandermonde: Vec<Vec<u8>> = Vec::with_capacity(encoding.data_chunks as usize);
         for i in 0..encoding.data_chunks {
             let mut row = Vec::with_capacity(encoding.data_chunks as usize);
@@ -204,35 +212,102 @@ impl VandermondeEncoder {
             vandermonde.push(row);
         }
 
-        let maybe_matrix: Result<Matrix, &'static str> = Matrix::try_from(vandermonde);
-        if maybe_matrix.is_err() {
+        let mut code_vandermonde = Vec::with_capacity(encoding.code_chunks as usize);
+        for i in encoding.data_chunks..encoding.total_chunks() {
+            let mut row = Vec::with_capacity(encoding.data_chunks as usize);
+            for j in 0..encoding.data_chunks {
+                row.push(field.exp(i, j));
+            }
+            code_vandermonde.push(row);
+        }
+
+        let maybe_vandermonde: Result<Matrix, &'static str> = Matrix::try_from(vandermonde);
+        if maybe_vandermonde.is_err() {
             return Err(format!(
                 "Could not create vandermonde matrix: {}",
-                maybe_matrix.unwrap_err()
+                maybe_vandermonde.unwrap_err()
             ));
         }
 
-        let maybe_inverted = maybe_matrix.unwrap().invert(&field);
+        let maybe_inverted = maybe_vandermonde.unwrap().invert(field);
         if maybe_inverted.is_err() {
             return Err(format!(
                 "Could not invert vandermonde matrix: {}",
                 maybe_inverted.unwrap_err()
             ));
         }
+
+        let maybe_code_vandermonde: Result<Matrix, &'static str> =
+            Matrix::try_from(code_vandermonde);
+        if maybe_code_vandermonde.is_err() {
+            return Err(format!(
+                "Could not create code vandermonde matrix: {}",
+                maybe_code_vandermonde.unwrap_err()
+            ));
+        }
+
         return Ok(VandermondeEncoder {
-            matrix: maybe_inverted.unwrap(),
+            code_vandermonde: maybe_code_vandermonde.unwrap(),
+            inverted: maybe_inverted.unwrap(),
         });
     }
 }
 
-// impl RSEncoder for VandermondeEncoder {
-//     fn encode_bytes<F: Field256>(encoding: Encoding, field: &F, bytes: &[u8]) -> RSStream {
-//
-//     }
-//     j
-//     fn decode_bytes<F: Field256>(stream: &RSStream, field: &F) -> Result<Vec<u8>, String> {
-//     }
-// }
+impl RSEncoder for VandermondeEncoder {
+    fn encode_bytes<F: Field256>(
+        &self,
+        encoding: Encoding,
+        field: &F,
+        bytes: &[u8],
+    ) -> Result<RSStream, String> {
+        println!("Self: {:?}", self);
+        if bytes.len() == 0 {
+            return Ok(RSStream::empty(encoding));
+        }
+
+        // The number of chunks.
+        let iterations = bytes.len() / encoding.data_chunks as usize;
+
+        // Generate our interpolated polynomial where P(i) for i from 0..encoding.data_chunks ==
+        // input[i * k] (where k is the iteration of bytes we are encoding).
+        let mut output: Vec<Vec<u8>> = Vec::with_capacity(iterations);
+        for (i, chunk) in bytes
+            .iter()
+            .cloned()
+            .chunked_with_default(encoding.data_chunks as usize, 0)
+            .enumerate()
+        {
+            let maybe_data = Matrix::try_from(&[&chunk[..]][..]);
+            if maybe_data.is_err() {
+                return Err(format!(
+                    "Could not construct data matrix: {}",
+                    maybe_data.unwrap_err()
+                ));
+            }
+            let coefficients = self.inverted.mul(&maybe_data.unwrap().transpose(), field);
+            let codes = self.code_vandermonde.mul(&coefficients, field);
+
+            output.push(Vec::with_capacity(encoding.total_chunks() as usize));
+            for b in 0..encoding.data_chunks {
+                output[i].push(chunk[b as usize]);
+            }
+            for b in 0..encoding.code_chunks {
+                output[i].push(codes.mat[b as usize][0]);
+            }
+        }
+
+        return Ok(RSStream {
+            length: bytes.len(),
+            encoding: encoding,
+            codes: output,
+            erasures: Vec::new(),
+        });
+    }
+
+    fn decode_bytes<F: Field256>(&self, stream: &RSStream, field: &F) -> Result<Vec<u8>, String> {
+        return Err(String::from("Not implemented"));
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -249,8 +324,9 @@ mod tests {
         let direct = DirectField::default();
         let encoding: Encoding = FromStr::from_str("rs=9.4").unwrap();
         let expected = RSStream::empty(encoding.clone());
+        let encoder = LagrangeInterpolationEncoder {};
         assert_eq!(
-            LagrangeInterpolationEncoder::encode_bytes(encoding, &direct, &[]),
+            encoder.encode_bytes(encoding, &direct, &[]).unwrap(),
             expected
         );
     }
@@ -267,12 +343,30 @@ mod tests {
                 vec![0x44, 0x45, 0x41, 0x44, 0x02, 0x1B],
                 vec![0x42, 0x45, 0x45, 0x46, 0x38, 0x27],
             ],
-            erasures: vec![false, false, false, false, false, false],
+            erasures: vec![],
         };
+        let encoder = LagrangeInterpolationEncoder {};
         assert_eq!(
-            LagrangeInterpolationEncoder::encode_bytes(encoding, &direct, &bytes),
+            encoder.encode_bytes(encoding, &direct, &bytes).unwrap(),
             expected
         );
+    }
+
+    #[test]
+    fn encode_decode_vandermonde() {
+        let direct = DirectField::default();
+        let bytes = "DEADBEEF".as_bytes();
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let encoder = VandermondeEncoder::new(&encoding, &direct)
+            .expect("Could not construct VandermondeEncoder.");
+        let encoded = encoder.encode_bytes(encoding, &direct, &bytes).unwrap();
+        let encoded = RSStream {
+            erasures: vec![false, true, false, false, false, true],
+            ..encoded
+        };
+        let decoder = LagrangeInterpolationEncoder {};
+        let decoded = decoder.decode_bytes(&encoded, &direct);
+        assert_eq!(decoded.unwrap(), bytes);
     }
 
     #[bench]
@@ -281,7 +375,8 @@ mod tests {
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        b.iter(|| LagrangeInterpolationEncoder::encode_bytes(encoding, &direct, &bytes[..]));
+        let encoder = LagrangeInterpolationEncoder {};
+        b.iter(|| encoder.encode_bytes(encoding, &direct, &bytes[..]));
     }
 
     #[test]
@@ -297,7 +392,8 @@ mod tests {
             ],
             erasures: vec![false, false, false, false, false, false],
         };
-        let res = LagrangeInterpolationEncoder::decode_bytes(&input, &direct);
+        let encoder = LagrangeInterpolationEncoder {};
+        let res = encoder.decode_bytes(&input, &direct);
         assert!(res.is_ok());
         assert_eq!(
             res.unwrap(),
@@ -310,9 +406,10 @@ mod tests {
         let direct = ExpLogField::default();
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
+        let encoder = LagrangeInterpolationEncoder {};
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let encoded = LagrangeInterpolationEncoder::encode_bytes(encoding, &direct, &bytes[..]);
-        b.iter(|| LagrangeInterpolationEncoder::decode_bytes(&encoded, &direct));
+        let encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
+        b.iter(|| encoder.decode_bytes(&encoded, &direct));
     }
 
     #[test]
@@ -328,7 +425,8 @@ mod tests {
             ],
             erasures: vec![false, false, false, false, true, true],
         };
-        let res = LagrangeInterpolationEncoder::decode_bytes(&input, &direct);
+        let encoder = LagrangeInterpolationEncoder {};
+        let res = encoder.decode_bytes(&input, &direct);
         assert!(res.is_ok());
         assert_eq!(
             res.expect("Got: "),
@@ -342,9 +440,10 @@ mod tests {
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let mut encoded = LagrangeInterpolationEncoder::encode_bytes(encoding, &direct, &bytes[..]);
+        let encoder = LagrangeInterpolationEncoder {};
+        let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
         encoded.erasures = vec![false, false, false, false, true, true];
-        b.iter(|| LagrangeInterpolationEncoder::decode_bytes(&encoded, &direct));
+        b.iter(|| encoder.decode_bytes(&encoded, &direct));
     }
 
     #[test]
@@ -360,7 +459,8 @@ mod tests {
             ],
             erasures: vec![true, false, true, false, false, false],
         };
-        let res = LagrangeInterpolationEncoder::decode_bytes(&input, &direct);
+        let encoder = LagrangeInterpolationEncoder {};
+        let res = encoder.decode_bytes(&input, &direct);
         assert_eq!(
             res.expect("Got: "),
             vec![0x44, 0x45, 0x41, 0x44, 0x42, 0x45, 0x45, 0x46]
@@ -373,9 +473,10 @@ mod tests {
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let mut encoded = LagrangeInterpolationEncoder::encode_bytes(encoding, &direct, &bytes[..]);
+        let encoder = LagrangeInterpolationEncoder {};
+        let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
         encoded.erasures = vec![true, false, true, false, false, false];
-        b.iter(|| LagrangeInterpolationEncoder::decode_bytes(&encoded, &direct));
+        b.iter(|| encoder.decode_bytes(&encoded, &direct));
     }
 
     #[test]
@@ -391,7 +492,8 @@ mod tests {
             ],
             erasures: vec![true, true, true, false, false, false],
         };
-        let res = LagrangeInterpolationEncoder::decode_bytes(&input, &direct);
+        let encoder = LagrangeInterpolationEncoder {};
+        let res = encoder.decode_bytes(&input, &direct);
         assert_eq!(res.is_err(), true);
     }
 
@@ -401,8 +503,9 @@ mod tests {
         let kilobyte_4 = 4 << 10;
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let mut encoded = LagrangeInterpolationEncoder::encode_bytes(encoding, &direct, &bytes[..]);
+        let encoder = LagrangeInterpolationEncoder {};
+        let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
         encoded.erasures = vec![true, true, true, false, false, false];
-        b.iter(|| LagrangeInterpolationEncoder::decode_bytes(&encoded, &direct));
+        b.iter(|| encoder.decode_bytes(&encoded, &direct));
     }
 }

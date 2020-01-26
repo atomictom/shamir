@@ -7,7 +7,7 @@ use std::iter;
 pub struct Matrix {
     rows: usize,
     cols: usize,
-    mat: Vec<Vec<u8>>,
+    pub mat: Vec<Vec<u8>>,
 }
 
 impl Display for Matrix {
@@ -151,6 +151,21 @@ impl Matrix {
         }
         self.cols *= 2;
         return self;
+    }
+
+    pub fn transpose(self: &Self) -> Self {
+        let mut mat = Vec::with_capacity(self.cols);
+        for i in 0..self.cols {
+            mat.push(Vec::with_capacity(self.rows));
+            for j in 0..self.rows {
+                mat[i].push(self.mat[j][i]);
+            }
+        }
+        return Matrix {
+            rows: self.cols,
+            cols: self.rows,
+            mat: mat,
+        };
     }
 
     pub fn invert<F: Field256>(self: &Self, field: &F) -> Result<Self, &'static str> {

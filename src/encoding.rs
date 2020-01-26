@@ -8,8 +8,8 @@ pub struct Encoding {
 }
 
 impl Encoding {
-    pub fn total_chunks(self: &Self) -> usize {
-        return (self.data_chunks + self.code_chunks) as usize;
+    pub fn total_chunks(self: &Self) -> u8 {
+        return self.data_chunks + self.code_chunks;
     }
 }
 
