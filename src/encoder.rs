@@ -203,6 +203,7 @@ impl VandermondeEncoder {
     // result will be multiplied by the input data points to generate the polynomial coefficients
     // that would generate those points.
     pub fn new<F: Field256>(encoding: &Encoding, field: &F) -> Result<VandermondeEncoder, String> {
+        let vandermonde = VandermondeMatrix()
         let mut vandermonde: Vec<Vec<u8>> = Vec::with_capacity(encoding.data_chunks as usize);
         for i in 0..encoding.data_chunks {
             let mut row = Vec::with_capacity(encoding.data_chunks as usize);
@@ -305,6 +306,63 @@ impl RSEncoder for VandermondeEncoder {
     }
 
     fn decode_bytes<F: Field256>(&self, stream: &RSStream, field: &F) -> Result<Vec<u8>, String> {
+        let RSStream {
+            length,
+            encoding,
+            codes,
+            erasures,
+        } = stream;
+        if *length == 0 {
+            return Ok(Vec::new());
+        }
+        if erasures.iter().filter(|x| **x).map(|_x| 1).sum::<u8>() > encoding.code_chunks {
+            return Err(String::from("Too many erasures to recover"));
+        }
+
+        let mut res = Vec::with_capacity(*length);
+        if erasures
+            .iter()
+            .take(encoding.data_chunks as usize)
+            .all(|x| !*x)
+        {
+            for i in 0..*length {
+                let row = i / encoding.data_chunks as usize;
+                let col = i % encoding.data_chunks as usize;
+                res.push(codes[row][col]);
+            }
+            return Ok(res);
+        } else {
+            // First, figure out which indices are valid.
+            let valid_indices: Vec<_> = erasures
+                .iter()
+                .enumerate()
+                .filter(|(_, y)| !**y)
+                .map(|(x, _)| x)
+                .take(encoding.data_chunks as usize)
+                .collect();
+
+            // Generate the inverted vandermonde matrix for the valid indices.
+
+
+
+            // Now, for each input row, interpolate the polynomial and then generate our data
+            // points.
+            let rows = length / encoding.data_chunks as usize;
+            for row in 0..rows {
+                let row = row as usize;
+                let points: Vec<_> = valid_indices
+                    .iter()
+                    .map(|col| (*col as u8, codes[row][*col as usize]))
+                    .collect();
+                let p = Polynomial::interpolate_points(&points[..], field);
+                for col in 0..encoding.data_chunks {
+                    let i = row * encoding.data_chunks as usize + col as usize;
+                    res.insert(i, p.evaluate(col as u8, field));
+                }
+            }
+
+            return Ok(res);
+        }
         return Err(String::from("Not implemented"));
     }
 }

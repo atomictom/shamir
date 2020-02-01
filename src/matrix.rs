@@ -218,6 +218,21 @@ impl Matrix {
     }
 }
 
+pub fn VandermondeMatrix<F: Field256>(rows: Vec<bool>, cols: usize, field: &F) -> Matrix {
+    let mut matrix = Vec::with_capacity(rows.iter().filter(|x| **x).count());
+    for i in 0..rows.len() {
+        if !rows[i] {
+            continue;
+        }
+        let mut row = Vec::with_capacity(cols);
+        for j in 0..cols {
+            row.push(field.exp(i as u8, j as u8));
+        }
+        matrix.push(row);
+    }
+    return Matrix::try_from(matrix).expect("Could not create Vandermonde Matrix!");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
