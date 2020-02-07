@@ -2,6 +2,8 @@ use crate::chunker::ChunkerExt;
 use crate::encoding::Encoding;
 use crate::finite_field::Field256;
 use crate::matrix::Matrix;
+use crate::matrix::PartialVandermondeMatrix;
+use crate::matrix::VandermondeMatrix;
 use crate::polynomial::Polynomial;
 use std::convert::TryFrom;
 use std::iter;
@@ -14,10 +16,11 @@ pub struct RSStream {
     pub length: usize,
     // How the reed-solomon data has been encoded.
     pub encoding: Encoding,
+    // codes has list per chunk with the values being those within the chunk.
     pub codes: Vec<Vec<u8>>,
-    // True for [i] if there was an erasure in codes[*][i]. Can be empty if there is no erasure
+    // True for [i] if there was NOT an erasure in codes[*][i]. Can be empty if there is no erasure
     // data.
-    pub erasures: Vec<bool>,
+    pub valid: Vec<bool>,
 }
 
 impl RSStream {
@@ -26,7 +29,7 @@ impl RSStream {
             length: 0,
             encoding: encoding,
             codes: Vec::new(),
-            erasures: Vec::new(),
+            valid: Vec::new(),
         }
     }
 }
@@ -86,7 +89,7 @@ impl RSEncoder for LagrangeInterpolationEncoder {
             length: bytes.len(),
             encoding: encoding,
             codes: output,
-            erasures: Vec::new(),
+            valid: Vec::new(),
         });
     }
 
@@ -95,20 +98,23 @@ impl RSEncoder for LagrangeInterpolationEncoder {
             length,
             encoding,
             codes,
-            erasures,
+            valid,
         } = stream;
         if *length == 0 {
             return Ok(Vec::new());
         }
-        if erasures.iter().filter(|x| **x).map(|_x| 1).sum::<u8>() > encoding.code_chunks {
+        if valid.iter().cloned().filter(|x| *x).count() < encoding.data_chunks as usize {
             return Err(String::from("Too many erasures to recover"));
         }
 
         let mut res = Vec::with_capacity(*length);
-        if erasures
+
+        // Fast path with no data erasures
+        if valid
             .iter()
+            .cloned()
             .take(encoding.data_chunks as usize)
-            .all(|x| !*x)
+            .all(|x| x)
         {
             for i in 0..*length {
                 let row = i / encoding.data_chunks as usize;
@@ -116,34 +122,37 @@ impl RSEncoder for LagrangeInterpolationEncoder {
                 res.push(codes[row][col]);
             }
             return Ok(res);
-        } else {
-            // First, figure out which indices are valid.
-            let valid_indices: Vec<_> = erasures
-                .iter()
-                .enumerate()
-                .filter(|(_, y)| !**y)
-                .map(|(x, _)| x)
-                .take(encoding.data_chunks as usize)
-                .collect();
-
-            // Now, for each input row, interpolate the polynomial and then generate our data
-            // points.
-            let rows = length / encoding.data_chunks as usize;
-            for row in 0..rows {
-                let row = row as usize;
-                let points: Vec<_> = valid_indices
-                    .iter()
-                    .map(|col| (*col as u8, codes[row][*col as usize]))
-                    .collect();
-                let p = Polynomial::interpolate_points(&points[..], field);
-                for col in 0..encoding.data_chunks {
-                    let i = row * encoding.data_chunks as usize + col as usize;
-                    res.insert(i, p.evaluate(col as u8, field));
-                }
-            }
-
-            return Ok(res);
         }
+
+        // Slow path with erasures
+
+        // First, figure out which indices are valid.
+        let valid_indices: Vec<_> = valid
+            .iter()
+            .cloned()
+            .enumerate()
+            .filter(|(_, y)| *y)
+            .map(|(x, _)| x)
+            .take(encoding.data_chunks as usize)
+            .collect();
+
+        // Now, for each input row, interpolate the polynomial and then generate our data
+        // points.
+        let rows = length / encoding.data_chunks as usize;
+        for row in 0..rows {
+            let row = row as usize;
+            let points: Vec<_> = valid_indices
+                .iter()
+                .map(|col| (*col as u8, codes[row][*col as usize]))
+                .collect();
+            let p = Polynomial::interpolate_points(&points[..], field);
+            for col in 0..encoding.data_chunks {
+                let i = row * encoding.data_chunks as usize + col as usize;
+                res.insert(i, p.evaluate(col as u8, field));
+            }
+        }
+
+        return Ok(res);
     }
 }
 
@@ -192,67 +201,38 @@ impl RSEncoder for LagrangeInterpolationEncoder {
 #[derive(Debug, Clone)]
 pub struct VandermondeEncoder {
     // The inverted vandermonde matrix used to compute polynomial coefficients given a set of data
-    // points.
-    inverted: Matrix,
-    // A Vandermonde matrix for generating the code points with the polynomial coefficients.
-    code_vandermonde: Matrix,
+// points.
+// inverted: Matrix,
+// A Vandermonde matrix for generating code or data points with the polynomial coefficients.
+// vandermonde: Matrix,
 }
 
-impl VandermondeEncoder {
-    // Generates a new Vandermonde matrix to be used with a given encoding and inverts it. The
-    // result will be multiplied by the input data points to generate the polynomial coefficients
-    // that would generate those points.
-    pub fn new<F: Field256>(encoding: &Encoding, field: &F) -> Result<VandermondeEncoder, String> {
-        let vandermonde = VandermondeMatrix()
-        let mut vandermonde: Vec<Vec<u8>> = Vec::with_capacity(encoding.data_chunks as usize);
-        for i in 0..encoding.data_chunks {
-            let mut row = Vec::with_capacity(encoding.data_chunks as usize);
-            for j in 0..encoding.data_chunks {
-                row.push(field.exp(i, j));
-            }
-            vandermonde.push(row);
-        }
-
-        let mut code_vandermonde = Vec::with_capacity(encoding.code_chunks as usize);
-        for i in encoding.data_chunks..encoding.total_chunks() {
-            let mut row = Vec::with_capacity(encoding.data_chunks as usize);
-            for j in 0..encoding.data_chunks {
-                row.push(field.exp(i, j));
-            }
-            code_vandermonde.push(row);
-        }
-
-        let maybe_vandermonde: Result<Matrix, &'static str> = Matrix::try_from(vandermonde);
-        if maybe_vandermonde.is_err() {
-            return Err(format!(
-                "Could not create vandermonde matrix: {}",
-                maybe_vandermonde.unwrap_err()
-            ));
-        }
-
-        let maybe_inverted = maybe_vandermonde.unwrap().invert(field);
-        if maybe_inverted.is_err() {
-            return Err(format!(
-                "Could not invert vandermonde matrix: {}",
-                maybe_inverted.unwrap_err()
-            ));
-        }
-
-        let maybe_code_vandermonde: Result<Matrix, &'static str> =
-            Matrix::try_from(code_vandermonde);
-        if maybe_code_vandermonde.is_err() {
-            return Err(format!(
-                "Could not create code vandermonde matrix: {}",
-                maybe_code_vandermonde.unwrap_err()
-            ));
-        }
-
-        return Ok(VandermondeEncoder {
-            code_vandermonde: maybe_code_vandermonde.unwrap(),
-            inverted: maybe_inverted.unwrap(),
-        });
-    }
-}
+// impl VandermondeEncoder {
+// Generates a new Vandermonde matrix to be used with a given encoding and inverts it. The
+// result will be multiplied by the input data points to generate the polynomial coefficients
+// that would generate those points.
+// pub fn new<F: Field256>(encoding: &Encoding, field: &F) -> Result<VandermondeEncoder, String> {
+//     let inverted = VandermondeMatrix(
+//         0,
+//         encoding.data_chunks as usize,
+//         encoding.data_chunks as usize,
+//         field,
+//     )?
+//     .invert(field)?;
+//
+//     let vandermonde = VandermondeMatrix(
+//         encoding.data_chunks as usize,
+//         encoding.code_chunks as usize,
+//         encoding.data_chunks as usize,
+//         field,
+//     )?;
+//
+//     return Ok(VandermondeEncoder {
+//         inverted: inverted,
+//         vandermonde: vandermonde,
+//     });
+// }
+// }
 
 impl RSEncoder for VandermondeEncoder {
     fn encode_bytes<F: Field256>(
@@ -261,16 +241,29 @@ impl RSEncoder for VandermondeEncoder {
         field: &F,
         bytes: &[u8],
     ) -> Result<RSStream, String> {
-        println!("Self: {:?}", self);
         if bytes.len() == 0 {
             return Ok(RSStream::empty(encoding));
         }
 
+        let inverted = VandermondeMatrix(
+            0,
+            encoding.data_chunks as usize,
+            encoding.data_chunks as usize,
+            field,
+        )?
+        .invert(field)?;
+
+        let vandermonde = VandermondeMatrix(
+            encoding.data_chunks as usize,
+            encoding.code_chunks as usize,
+            encoding.data_chunks as usize,
+            field,
+        )?;
+
         // The number of chunks.
         let iterations = bytes.len() / encoding.data_chunks as usize;
 
-        // Generate our interpolated polynomial where P(i) for i from 0..encoding.data_chunks ==
-        // input[i * k] (where k is the iteration of bytes we are encoding).
+        // Generate data one "chunk" at a time (i.e. the data symbols and the code symbols).
         let mut output: Vec<Vec<u8>> = Vec::with_capacity(iterations);
         for (i, chunk) in bytes
             .iter()
@@ -278,15 +271,9 @@ impl RSEncoder for VandermondeEncoder {
             .chunked_with_default(encoding.data_chunks as usize, 0)
             .enumerate()
         {
-            let maybe_data = Matrix::try_from(&[&chunk[..]][..]);
-            if maybe_data.is_err() {
-                return Err(format!(
-                    "Could not construct data matrix: {}",
-                    maybe_data.unwrap_err()
-                ));
-            }
-            let coefficients = self.inverted.mul(&maybe_data.unwrap().transpose(), field);
-            let codes = self.code_vandermonde.mul(&coefficients, field);
+            let data = Matrix::try_from(&[&chunk[..]][..])?;
+            let coefficients = inverted.mul(&data.transpose(), field);
+            let codes = vandermonde.mul(&coefficients, field);
 
             output.push(Vec::with_capacity(encoding.total_chunks() as usize));
             for b in 0..encoding.data_chunks {
@@ -301,7 +288,7 @@ impl RSEncoder for VandermondeEncoder {
             length: bytes.len(),
             encoding: encoding,
             codes: output,
-            erasures: Vec::new(),
+            valid: Vec::new(),
         });
     }
 
@@ -310,20 +297,33 @@ impl RSEncoder for VandermondeEncoder {
             length,
             encoding,
             codes,
-            erasures,
+            valid,
         } = stream;
         if *length == 0 {
             return Ok(Vec::new());
         }
-        if erasures.iter().filter(|x| **x).map(|_x| 1).sum::<u8>() > encoding.code_chunks {
+        let valid_indices: Vec<usize> = valid
+            .iter()
+            .cloned()
+            .enumerate()
+            .filter(|(_, valid)| *valid)
+            .map(|(i, _)| i)
+            .take(encoding.data_chunks as usize)
+            .collect();
+        println!("Valid: {:?}", valid_indices);
+
+        if valid_indices.len() < encoding.data_chunks as usize {
             return Err(String::from("Too many erasures to recover"));
         }
 
         let mut res = Vec::with_capacity(*length);
-        if erasures
+
+        // Fast path with no erasures
+        if valid
             .iter()
+            .cloned()
             .take(encoding.data_chunks as usize)
-            .all(|x| !*x)
+            .all(|x| x)
         {
             for i in 0..*length {
                 let row = i / encoding.data_chunks as usize;
@@ -331,39 +331,44 @@ impl RSEncoder for VandermondeEncoder {
                 res.push(codes[row][col]);
             }
             return Ok(res);
-        } else {
-            // First, figure out which indices are valid.
-            let valid_indices: Vec<_> = erasures
-                .iter()
-                .enumerate()
-                .filter(|(_, y)| !**y)
-                .map(|(x, _)| x)
-                .take(encoding.data_chunks as usize)
-                .collect();
-
-            // Generate the inverted vandermonde matrix for the valid indices.
-
-
-
-            // Now, for each input row, interpolate the polynomial and then generate our data
-            // points.
-            let rows = length / encoding.data_chunks as usize;
-            for row in 0..rows {
-                let row = row as usize;
-                let points: Vec<_> = valid_indices
-                    .iter()
-                    .map(|col| (*col as u8, codes[row][*col as usize]))
-                    .collect();
-                let p = Polynomial::interpolate_points(&points[..], field);
-                for col in 0..encoding.data_chunks {
-                    let i = row * encoding.data_chunks as usize + col as usize;
-                    res.insert(i, p.evaluate(col as u8, field));
-                }
-            }
-
-            return Ok(res);
         }
-        return Err(String::from("Not implemented"));
+
+        // Slow path with erasures.
+
+        // Generate the inverted vandermonde matrix for the valid indices to generate polynomial
+        // coefficients.
+        let inverted =
+            PartialVandermondeMatrix(valid.iter().cloned(), encoding.data_chunks as usize, field)?
+                .invert(field)?;
+
+        // Generate the data vandermonde matrix to be used with the coefficients to generate the
+        // original data.
+        let vandermonde = VandermondeMatrix(
+            0,
+            encoding.data_chunks as usize,
+            encoding.data_chunks as usize,
+            field,
+        )?;
+
+        // Loop through each chunk and decode it.
+        let mut chunk: Vec<u8> = iter::repeat(0)
+            .take(encoding.data_chunks as usize)
+            .collect();
+        let rows = length / encoding.data_chunks as usize;
+        for i in 0..rows {
+            for (e, j) in valid_indices.iter().cloned().enumerate() {
+                chunk[e] = codes[i as usize][j as usize];
+            }
+            // Some combo of data and/or codes.
+            let values = Matrix::try_from(&[&chunk[..]][..])?;
+            let coefficients = inverted.mul(&values.transpose(), field);
+            let original_data = vandermonde.mul(&coefficients, field);
+            for j in 0..encoding.data_chunks {
+                res.push(original_data.mat[j as usize][0]);
+            }
+        }
+
+        return Ok(res);
     }
 }
 
@@ -401,7 +406,7 @@ mod tests {
                 vec![0x44, 0x45, 0x41, 0x44, 0x02, 0x1B],
                 vec![0x42, 0x45, 0x45, 0x46, 0x38, 0x27],
             ],
-            erasures: vec![],
+            valid: vec![],
         };
         let encoder = LagrangeInterpolationEncoder {};
         assert_eq!(
@@ -415,14 +420,15 @@ mod tests {
         let direct = DirectField::default();
         let bytes = "DEADBEEF".as_bytes();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let encoder = VandermondeEncoder::new(&encoding, &direct)
-            .expect("Could not construct VandermondeEncoder.");
+        // let encoder = VandermondeEncoder::new(&encoding, &direct)
+        // .expect("Could not construct VandermondeEncoder.");
+        let encoder = VandermondeEncoder {};
         let encoded = encoder.encode_bytes(encoding, &direct, &bytes).unwrap();
         let encoded = RSStream {
-            erasures: vec![false, true, false, false, false, true],
+            valid: vec![true, false, true, true, true, false],
             ..encoded
         };
-        let decoder = LagrangeInterpolationEncoder {};
+        let decoder = VandermondeEncoder {};
         let decoded = decoder.decode_bytes(&encoded, &direct);
         assert_eq!(decoded.unwrap(), bytes);
     }
@@ -448,7 +454,7 @@ mod tests {
                 vec![0x44, 0x45, 0x41, 0x44, 0x02, 0x1B],
                 vec![0x42, 0x45, 0x45, 0x46, 0x38, 0x27],
             ],
-            erasures: vec![false, false, false, false, false, false],
+            valid: vec![true, true, true, true, true, true],
         };
         let encoder = LagrangeInterpolationEncoder {};
         let res = encoder.decode_bytes(&input, &direct);
@@ -481,7 +487,7 @@ mod tests {
                 vec![0x44, 0x45, 0x41, 0x44, 0x00, 0x00],
                 vec![0x42, 0x45, 0x45, 0x46, 0x00, 0x00],
             ],
-            erasures: vec![false, false, false, false, true, true],
+            valid: vec![true, true, true, true, false, false],
         };
         let encoder = LagrangeInterpolationEncoder {};
         let res = encoder.decode_bytes(&input, &direct);
@@ -500,7 +506,7 @@ mod tests {
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let encoder = LagrangeInterpolationEncoder {};
         let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
-        encoded.erasures = vec![false, false, false, false, true, true];
+        encoded.valid = vec![true, true, true, true, false, false];
         b.iter(|| encoder.decode_bytes(&encoded, &direct));
     }
 
@@ -515,7 +521,7 @@ mod tests {
                 vec![0x00, 0x45, 0x00, 0x44, 0x02, 0x1B],
                 vec![0x00, 0x45, 0x00, 0x46, 0x38, 0x27],
             ],
-            erasures: vec![true, false, true, false, false, false],
+            valid: vec![false, true, false, true, true, true],
         };
         let encoder = LagrangeInterpolationEncoder {};
         let res = encoder.decode_bytes(&input, &direct);
@@ -533,7 +539,7 @@ mod tests {
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let encoder = LagrangeInterpolationEncoder {};
         let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
-        encoded.erasures = vec![true, false, true, false, false, false];
+        encoded.valid = vec![false, true, false, true, true, true];
         b.iter(|| encoder.decode_bytes(&encoded, &direct));
     }
 
@@ -548,7 +554,7 @@ mod tests {
                 vec![0x00, 0x00, 0x00, 0x44, 0x02, 0x1B],
                 vec![0x00, 0x00, 0x00, 0x46, 0x38, 0x27],
             ],
-            erasures: vec![true, true, true, false, false, false],
+            valid: vec![false, false, false, true, true, true],
         };
         let encoder = LagrangeInterpolationEncoder {};
         let res = encoder.decode_bytes(&input, &direct);
@@ -563,7 +569,7 @@ mod tests {
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let encoder = LagrangeInterpolationEncoder {};
         let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
-        encoded.erasures = vec![true, true, true, false, false, false];
+        encoded.valid = vec![false, false, false, true, true, true];
         b.iter(|| encoder.decode_bytes(&encoded, &direct));
     }
 }

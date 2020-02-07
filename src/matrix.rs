@@ -13,12 +13,12 @@ pub struct Matrix {
 impl Display for Matrix {
     fn fmt(self: &Self, formatter: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         for i in 0..self.rows {
-            formatter.write_str("\n");
+            formatter.write_str("\n")?;
             for j in 0..self.cols {
                 if j > 0 {
-                    formatter.write_str(" ");
+                    formatter.write_str(" ")?;
                 }
-                formatter.write_str(format!("{}", self.mat[i][j]).as_str());
+                formatter.write_str(format!("{}", self.mat[i][j]).as_str())?;
             }
         }
         return Ok(());
@@ -143,7 +143,7 @@ impl Matrix {
         return self;
     }
 
-    fn augment(self: &mut Self) -> &mut Self {
+    fn augment_with_identity(self: &mut Self) -> &mut Self {
         for i in 0..self.rows {
             for j in 0..self.cols {
                 self.mat[i].push(if i == j { 1 } else { 0 });
@@ -170,7 +170,7 @@ impl Matrix {
 
     pub fn invert<F: Field256>(self: &Self, field: &F) -> Result<Self, &'static str> {
         let mut res = self.clone();
-        res.augment();
+        res.augment_with_identity();
 
         // Upper triangular reduction
         for i in 0..self.rows {
@@ -218,19 +218,39 @@ impl Matrix {
     }
 }
 
-pub fn VandermondeMatrix<F: Field256>(rows: Vec<bool>, cols: usize, field: &F) -> Matrix {
-    let mut matrix = Vec::with_capacity(rows.iter().filter(|x| **x).count());
-    for i in 0..rows.len() {
-        if !rows[i] {
-            continue;
-        }
+pub fn VandermondeMatrix<F: Field256>(
+    start: usize,
+    rows: usize,
+    cols: usize,
+    field: &F,
+) -> Result<Matrix, &'static str> {
+    let mut matrix = Vec::with_capacity(rows);
+    for i in start..(start + rows) {
         let mut row = Vec::with_capacity(cols);
         for j in 0..cols {
             row.push(field.exp(i as u8, j as u8));
         }
         matrix.push(row);
     }
-    return Matrix::try_from(matrix).expect("Could not create Vandermonde Matrix!");
+    // Creating this should not ever fail.
+    return Matrix::try_from(matrix);
+}
+
+pub fn PartialVandermondeMatrix<F: Field256, I: Iterator<Item = bool>>(
+    rows: I,
+    cols: usize,
+    field: &F,
+) -> Result<Matrix, &'static str> {
+    let mut matrix = Vec::with_capacity(cols);
+    for (i, _) in rows.enumerate().filter(|(_, x)| *x) {
+        let mut row = Vec::with_capacity(cols);
+        for j in 0..cols {
+            row.push(field.exp(i as u8, j as u8));
+        }
+        matrix.push(row);
+    }
+    // Creating this should not ever fail.
+    return Matrix::try_from(matrix);
 }
 
 #[cfg(test)]
