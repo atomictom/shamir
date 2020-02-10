@@ -1,9 +1,7 @@
 use crate::chunker::ChunkerExt;
 use crate::encoding::Encoding;
 use crate::finite_field::Field256;
-use crate::matrix::Matrix;
-use crate::matrix::PartialVandermondeMatrix;
-use crate::matrix::VandermondeMatrix;
+use crate::matrix::{partial_vandermonde_matrix, vandermonde_matrix, Matrix};
 use crate::polynomial::Polynomial;
 use std::convert::TryFrom;
 use std::iter;
@@ -245,7 +243,7 @@ impl RSEncoder for VandermondeEncoder {
             return Ok(RSStream::empty(encoding));
         }
 
-        let inverted = VandermondeMatrix(
+        let inverted = vandermonde_matrix(
             0,
             encoding.data_chunks as usize,
             encoding.data_chunks as usize,
@@ -253,34 +251,40 @@ impl RSEncoder for VandermondeEncoder {
         )?
         .invert(field)?;
 
-        let vandermonde = VandermondeMatrix(
+        let vandermonde = vandermonde_matrix(
             encoding.data_chunks as usize,
             encoding.code_chunks as usize,
             encoding.data_chunks as usize,
             field,
         )?;
 
+        let generator = vandermonde.mul(&inverted, field);
+
         // The number of chunks.
         let iterations = bytes.len() / encoding.data_chunks as usize;
 
         // Generate data one "chunk" at a time (i.e. the data symbols and the code symbols).
         let mut output: Vec<Vec<u8>> = Vec::with_capacity(iterations);
+        let mut buffer: Vec<u8> = iter::repeat(0)
+            .take(encoding.code_chunks as usize)
+            .collect();
         for (i, chunk) in bytes
             .iter()
             .cloned()
             .chunked_with_default(encoding.data_chunks as usize, 0)
             .enumerate()
         {
-            let data = Matrix::try_from(&[&chunk[..]][..])?;
-            let coefficients = inverted.mul(&data.transpose(), field);
-            let codes = vandermonde.mul(&coefficients, field);
+            let mut buffer: Vec<u8> = iter::repeat(0)
+                .take(encoding.code_chunks as usize)
+                .collect();
+            generator.mul_vec(&chunk, &mut buffer, field);
 
             output.push(Vec::with_capacity(encoding.total_chunks() as usize));
             for b in 0..encoding.data_chunks {
                 output[i].push(chunk[b as usize]);
             }
             for b in 0..encoding.code_chunks {
-                output[i].push(codes.mat[b as usize][0]);
+                output[i].push(buffer[b as usize]);
             }
         }
 
@@ -310,7 +314,6 @@ impl RSEncoder for VandermondeEncoder {
             .map(|(i, _)| i)
             .take(encoding.data_chunks as usize)
             .collect();
-        println!("Valid: {:?}", valid_indices);
 
         if valid_indices.len() < encoding.data_chunks as usize {
             return Err(String::from("Too many erasures to recover"));
@@ -337,34 +340,43 @@ impl RSEncoder for VandermondeEncoder {
 
         // Generate the inverted vandermonde matrix for the valid indices to generate polynomial
         // coefficients.
-        let inverted =
-            PartialVandermondeMatrix(valid.iter().cloned(), encoding.data_chunks as usize, field)?
-                .invert(field)?;
+        let inverted = partial_vandermonde_matrix(
+            valid.iter().cloned(),
+            encoding.data_chunks as usize,
+            field,
+        )?
+        .invert(field)?;
 
         // Generate the data vandermonde matrix to be used with the coefficients to generate the
         // original data.
-        let vandermonde = VandermondeMatrix(
+        let vandermonde = vandermonde_matrix(
             0,
             encoding.data_chunks as usize,
             encoding.data_chunks as usize,
             field,
         )?;
+        let generator = vandermonde.mul(&inverted, field);
 
         // Loop through each chunk and decode it.
         let mut chunk: Vec<u8> = iter::repeat(0)
             .take(encoding.data_chunks as usize)
             .collect();
         let rows = length / encoding.data_chunks as usize;
+
         for i in 0..rows {
+            let mut buffer: Vec<u8> = iter::repeat(0)
+                .take(encoding.data_chunks as usize)
+                .collect();
             for (e, j) in valid_indices.iter().cloned().enumerate() {
                 chunk[e] = codes[i as usize][j as usize];
             }
+            // let values = Matrix::try_from(&[&chunk[..]][..])?;
+            // let coefficients = inverted.mul(&values.transpose(), field);
+            // let original_data = vandermonde.mul(&coefficients, field);
             // Some combo of data and/or codes.
-            let values = Matrix::try_from(&[&chunk[..]][..])?;
-            let coefficients = inverted.mul(&values.transpose(), field);
-            let original_data = vandermonde.mul(&coefficients, field);
+            generator.mul_vec(&chunk, &mut buffer, field);
             for j in 0..encoding.data_chunks {
-                res.push(original_data.mat[j as usize][0]);
+                res.push(buffer[j as usize]);
             }
         }
 
@@ -434,6 +446,16 @@ mod tests {
     }
 
     #[bench]
+    fn encode_bytes_vandermonde_4k(b: &mut Bencher) {
+        let direct = ExpLogField::default();
+        let kilobyte_4 = 4 << 10;
+        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let encoder = VandermondeEncoder {};
+        b.iter(|| encoder.encode_bytes(encoding, &direct, &bytes[..]));
+    }
+
+    #[bench]
     fn encode_bytes_4k(b: &mut Bencher) {
         let direct = ExpLogField::default();
         let kilobyte_4 = 4 << 10;
@@ -476,6 +498,17 @@ mod tests {
         b.iter(|| encoder.decode_bytes(&encoded, &direct));
     }
 
+    #[bench]
+    fn decode_bytes_no_erasures_vandermonde_4k(b: &mut Bencher) {
+        let direct = ExpLogField::default();
+        let kilobyte_4 = 4 << 10;
+        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
+        let encoder = VandermondeEncoder {};
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
+        b.iter(|| encoder.decode_bytes(&encoded, &direct));
+    }
+
     #[test]
     fn decode_bytes_code_erasure() {
         let direct = DirectField::default();
@@ -510,6 +543,18 @@ mod tests {
         b.iter(|| encoder.decode_bytes(&encoded, &direct));
     }
 
+    #[bench]
+    fn decode_bytes_code_erasures_vandermonde_4k(b: &mut Bencher) {
+        let direct = ExpLogField::default();
+        let kilobyte_4 = 4 << 10;
+        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let encoder = VandermondeEncoder {};
+        let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
+        encoded.valid = vec![true, true, true, true, false, false];
+        b.iter(|| encoder.decode_bytes(&encoded, &direct));
+    }
+
     #[test]
     fn decode_bytes_data_erasure() {
         let direct = DirectField::default();
@@ -538,6 +583,18 @@ mod tests {
         let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let encoder = LagrangeInterpolationEncoder {};
+        let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
+        encoded.valid = vec![false, true, false, true, true, true];
+        b.iter(|| encoder.decode_bytes(&encoded, &direct));
+    }
+
+    #[bench]
+    fn decode_bytes_data_erasures_vandermonde_4k(b: &mut Bencher) {
+        let direct = ExpLogField::default();
+        let kilobyte_4 = 4 << 10;
+        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let encoder = VandermondeEncoder {};
         let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
         encoded.valid = vec![false, true, false, true, true, true];
         b.iter(|| encoder.decode_bytes(&encoded, &direct));

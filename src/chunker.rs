@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn chunk_uneven_split_default() {
         let bytes = &[1, 2, 3, 4, 5, 6, 7, 8];
-        for (index, chunk) in bytes.iter().chunked_with_default(3, &0).enumerate() {
+        for chunk in bytes.iter().chunked_with_default(3, &0) {
             assert_eq!(chunk.len(), 3);
         }
     }

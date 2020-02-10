@@ -116,6 +116,21 @@ impl Matrix {
         return res;
     }
 
+    // Fast multiplication of a vector by a matrix. Takes the input vector as a Vec and the output
+    // as a reference to a mutable Vec. The output *must* be initialized with zeros and be the same
+    // size as the input vector.
+    pub fn mul_vec<F: Field256>(self: &Self, vec: &Vec<u8>, out: &mut Vec<u8>, field: &F) {
+        assert!(self.cols == vec.len());
+        assert!(self.rows == out.len());
+
+        // Set each element of the matrix
+        for i in 0..self.rows {
+            for j in 0..self.cols {
+                out[i] = F::add(out[i], field.mul(self.mat[i][j], vec[j]));
+            }
+        }
+    }
+
     fn swap_row(self: &mut Self, from_row: usize, to_row: usize) -> &mut Self {
         let (mut x, mut y) = (&self.mat[to_row], &self.mat[from_row]);
         std::mem::swap(&mut x, &mut y);
@@ -218,7 +233,7 @@ impl Matrix {
     }
 }
 
-pub fn VandermondeMatrix<F: Field256>(
+pub fn vandermonde_matrix<F: Field256>(
     start: usize,
     rows: usize,
     cols: usize,
@@ -236,7 +251,7 @@ pub fn VandermondeMatrix<F: Field256>(
     return Matrix::try_from(matrix);
 }
 
-pub fn PartialVandermondeMatrix<F: Field256, I: Iterator<Item = bool>>(
+pub fn partial_vandermonde_matrix<F: Field256, I: Iterator<Item = bool>>(
     rows: I,
     cols: usize,
     field: &F,

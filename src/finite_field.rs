@@ -177,10 +177,11 @@ impl Field256 for ExpLogField {
     }
 
     fn exp(&self, x: u8, y: u8) -> u8 {
+        if y == 0 {
+            return 1;
+        }
         if x == 0 {
             return 0;
-        } else if y == 0 {
-            return 1;
         }
         let logx: u16 = self.log[x as usize] as u16;
         let logy: u16 = self.log[y as usize] as u16;
