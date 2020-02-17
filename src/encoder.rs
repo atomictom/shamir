@@ -1,9 +1,11 @@
 use crate::chunker::ChunkerExt;
 use crate::encoding::Encoding;
 use crate::finite_field::Field256;
-use crate::matrix::{partial_vandermonde_matrix, vandermonde_matrix, Matrix};
+use crate::matrix::Matrix;
+use crate::matrix::{
+    cauchy_matrix, partial_cauchy_matrix, partial_vandermonde_matrix, vandermonde_matrix,
+};
 use crate::polynomial::Polynomial;
-use std::convert::TryFrom;
 use std::iter;
 
 // Reed-Solomon encoded data.
@@ -154,83 +156,83 @@ impl RSEncoder for LagrangeInterpolationEncoder {
     }
 }
 
-// rs=3.2
-//
-// [1 0 0]         [A]
-// [0 1 0]   [A]   [B]
-// [0 0 1] * [B] = [C]
-// [? ? ?]   [C]   [X]
-// [? ? ?]         [Z]
-//
-//         [1 0 0]^-1     [A]
-//  [A]   ([0 1 0])      ([B])
-//  [B] =  [0 0 1]     *  [C]
-//  [C]    [? ? ?]        [X]
-//        ([? ? ?])      ([Z])
-//
-// 1 0 0     C0
-// 1 1 1  *  C1
-// 1 2 4     C2
-// 1 3 9
-//
-// i0^2 + j0^1 + k0^0 = a
-// i1^2 + j1^1 + k1^0 = b
-// i2^2 + j2^1 + k2^0 = c
-//
-//   5*3      3*1   5*1
-// [1 0  0]         [a]
-// [1 1  1]   [i]   [b]
-// [1 2  4] * [j] = [c]
-// [1 3  9]   [k]   [x]
-// [1 4 16]         [y]
-//
-// 3*1   5*1   5*3
-//       [a]   [1 0  0]^-1
-// [i]   [b]   [1 1  1]
-// [j] = [c] * [1 2  4]
-// [k]   [x]   [1 3  9]
-//       [y]   [1 4 16]
-//
-//
-// CX = P
-// C = D * X^-1
+fn encode_bytes_matrix<F: Field256>(
+    encoding: Encoding,
+    generator: &Matrix,
+    field: &F,
+    bytes: &[u8],
+) -> Result<RSStream, String> {
+    // The number of chunks.
+    let iterations = bytes.len() / encoding.data_chunks as usize;
 
-// Encoder using Vandermonde matrices to do polynomial interpolation.
-#[derive(Debug, Clone)]
-pub struct VandermondeEncoder {
-    // The inverted vandermonde matrix used to compute polynomial coefficients given a set of data
-// points.
-// inverted: Matrix,
-// A Vandermonde matrix for generating code or data points with the polynomial coefficients.
-// vandermonde: Matrix,
+    // Generate data one "chunk" at a time (i.e. the data symbols and the code symbols).
+    let mut output: Vec<Vec<u8>> = Vec::with_capacity(iterations);
+    let mut buffer: Vec<u8> = iter::repeat(0)
+        .take(encoding.code_chunks as usize)
+        .collect();
+    for (i, chunk) in bytes
+        .iter()
+        .cloned()
+        .chunked_with_default(encoding.data_chunks as usize, 0)
+        .enumerate()
+    {
+        generator.mul_vec(&chunk, &mut buffer, field);
+
+        output.push(Vec::with_capacity(encoding.total_chunks() as usize));
+        output[i].extend(chunk.iter().take(encoding.data_chunks as usize));
+        output[i].extend(buffer.iter().take(encoding.code_chunks as usize));
+    }
+
+    return Ok(RSStream {
+        length: bytes.len(),
+        encoding: encoding,
+        codes: output,
+        valid: Vec::new(),
+    });
 }
 
-// impl VandermondeEncoder {
-// Generates a new Vandermonde matrix to be used with a given encoding and inverts it. The
-// result will be multiplied by the input data points to generate the polynomial coefficients
-// that would generate those points.
-// pub fn new<F: Field256>(encoding: &Encoding, field: &F) -> Result<VandermondeEncoder, String> {
-//     let inverted = VandermondeMatrix(
-//         0,
-//         encoding.data_chunks as usize,
-//         encoding.data_chunks as usize,
-//         field,
-//     )?
-//     .invert(field)?;
-//
-//     let vandermonde = VandermondeMatrix(
-//         encoding.data_chunks as usize,
-//         encoding.code_chunks as usize,
-//         encoding.data_chunks as usize,
-//         field,
-//     )?;
-//
-//     return Ok(VandermondeEncoder {
-//         inverted: inverted,
-//         vandermonde: vandermonde,
-//     });
-// }
-// }
+fn decode_bytes_matrix<F: Field256>(
+    stream: &RSStream,
+    generator: &Matrix,
+    valid_indices: &[usize],
+    field: &F,
+) -> Result<Vec<u8>, String> {
+    let RSStream {
+        length,
+        encoding,
+        codes,
+        valid: _,
+    } = stream;
+    let mut res = Vec::with_capacity(*length);
+
+    // Slow path with erasures.
+    let mut chunk: Vec<u8> = iter::repeat(0)
+        .take(encoding.data_chunks as usize)
+        .collect();
+
+    let mut buffer: Vec<u8> = iter::repeat(0)
+        .take(encoding.data_chunks as usize)
+        .collect();
+
+    // Loop through each chunk and decode it.
+    let rows = length / encoding.data_chunks as usize;
+    for i in 0..rows {
+        for (e, j) in valid_indices.iter().cloned().enumerate() {
+            chunk[e] = codes[i as usize][j as usize];
+        }
+        generator.mul_vec(&chunk, &mut buffer, field);
+        res.extend(buffer.iter().take(encoding.data_chunks as usize));
+    }
+
+    return Ok(res);
+}
+// Encoder using Vandermonde matrices to do polynomial interpolation.
+#[derive(Debug, Clone, Default)]
+pub struct VandermondeEncoder {}
+
+// Encoder using Cauchy matrices to do polynomial interpolation.
+#[derive(Debug, Clone, Default)]
+pub struct CauchyEncoder {}
 
 impl RSEncoder for VandermondeEncoder {
     fn encode_bytes<F: Field256>(
@@ -251,49 +253,14 @@ impl RSEncoder for VandermondeEncoder {
         )?
         .invert(field)?;
 
-        let vandermonde = vandermonde_matrix(
+        let generator = vandermonde_matrix(
             encoding.data_chunks as usize,
             encoding.code_chunks as usize,
             encoding.data_chunks as usize,
             field,
-        )?;
-
-        let generator = vandermonde.mul(&inverted, field);
-
-        // The number of chunks.
-        let iterations = bytes.len() / encoding.data_chunks as usize;
-
-        // Generate data one "chunk" at a time (i.e. the data symbols and the code symbols).
-        let mut output: Vec<Vec<u8>> = Vec::with_capacity(iterations);
-        let mut buffer: Vec<u8> = iter::repeat(0)
-            .take(encoding.code_chunks as usize)
-            .collect();
-        for (i, chunk) in bytes
-            .iter()
-            .cloned()
-            .chunked_with_default(encoding.data_chunks as usize, 0)
-            .enumerate()
-        {
-            let mut buffer: Vec<u8> = iter::repeat(0)
-                .take(encoding.code_chunks as usize)
-                .collect();
-            generator.mul_vec(&chunk, &mut buffer, field);
-
-            output.push(Vec::with_capacity(encoding.total_chunks() as usize));
-            for b in 0..encoding.data_chunks {
-                output[i].push(chunk[b as usize]);
-            }
-            for b in 0..encoding.code_chunks {
-                output[i].push(buffer[b as usize]);
-            }
-        }
-
-        return Ok(RSStream {
-            length: bytes.len(),
-            encoding: encoding,
-            codes: output,
-            valid: Vec::new(),
-        });
+        )?
+        .mul(&inverted, field);
+        return encode_bytes_matrix(encoding, &generator, field, bytes);
     }
 
     fn decode_bytes<F: Field256>(&self, stream: &RSStream, field: &F) -> Result<Vec<u8>, String> {
@@ -319,24 +286,21 @@ impl RSEncoder for VandermondeEncoder {
             return Err(String::from("Too many erasures to recover"));
         }
 
-        let mut res = Vec::with_capacity(*length);
-
-        // Fast path with no erasures
-        if valid
-            .iter()
-            .cloned()
-            .take(encoding.data_chunks as usize)
-            .all(|x| x)
-        {
-            for i in 0..*length {
-                let row = i / encoding.data_chunks as usize;
-                let col = i % encoding.data_chunks as usize;
-                res.push(codes[row][col]);
-            }
-            return Ok(res);
-        }
-
-        // Slow path with erasures.
+        // // Fast path with no erasures
+        // if valid
+        //     .iter()
+        //     .cloned()
+        //     .take(encoding.data_chunks as usize)
+        //     .all(|x| x)
+        // {
+        //     let mut res = Vec::with_capacity(*length);
+        //     for i in 0..*length {
+        //         let row = i / encoding.data_chunks as usize;
+        //         let col = i % encoding.data_chunks as usize;
+        //         res.push(codes[row][col]);
+        //     }
+        //     return Ok(res);
+        // }
 
         // Generate the inverted vandermonde matrix for the valid indices to generate polynomial
         // coefficients.
@@ -349,38 +313,85 @@ impl RSEncoder for VandermondeEncoder {
 
         // Generate the data vandermonde matrix to be used with the coefficients to generate the
         // original data.
-        let vandermonde = vandermonde_matrix(
+        let generator = vandermonde_matrix(
             0,
             encoding.data_chunks as usize,
             encoding.data_chunks as usize,
             field,
-        )?;
-        let generator = vandermonde.mul(&inverted, field);
+        )?
+        .mul(&inverted, field);
+        return decode_bytes_matrix(stream, &generator, &valid_indices[..], field);
+    }
+}
 
-        // Loop through each chunk and decode it.
-        let mut chunk: Vec<u8> = iter::repeat(0)
-            .take(encoding.data_chunks as usize)
-            .collect();
-        let rows = length / encoding.data_chunks as usize;
-
-        for i in 0..rows {
-            let mut buffer: Vec<u8> = iter::repeat(0)
-                .take(encoding.data_chunks as usize)
-                .collect();
-            for (e, j) in valid_indices.iter().cloned().enumerate() {
-                chunk[e] = codes[i as usize][j as usize];
-            }
-            // let values = Matrix::try_from(&[&chunk[..]][..])?;
-            // let coefficients = inverted.mul(&values.transpose(), field);
-            // let original_data = vandermonde.mul(&coefficients, field);
-            // Some combo of data and/or codes.
-            generator.mul_vec(&chunk, &mut buffer, field);
-            for j in 0..encoding.data_chunks {
-                res.push(buffer[j as usize]);
-            }
+impl RSEncoder for CauchyEncoder {
+    fn encode_bytes<F: Field256>(
+        &self,
+        encoding: Encoding,
+        field: &F,
+        bytes: &[u8],
+    ) -> Result<RSStream, String> {
+        if bytes.len() == 0 {
+            return Ok(RSStream::empty(encoding));
         }
 
-        return Ok(res);
+        let inverted = cauchy_matrix(
+            0,
+            encoding.data_chunks as usize,
+            encoding.data_chunks as usize,
+            field,
+        )?
+        .invert(field)?;
+
+        let generator = cauchy_matrix(
+            encoding.data_chunks as usize,
+            encoding.code_chunks as usize,
+            encoding.data_chunks as usize,
+            field,
+        )?
+        .mul(&inverted, field);
+        return encode_bytes_matrix(encoding, &generator, field, bytes);
+    }
+
+    fn decode_bytes<F: Field256>(&self, stream: &RSStream, field: &F) -> Result<Vec<u8>, String> {
+        let RSStream {
+            length,
+            encoding,
+            codes,
+            valid,
+        } = stream;
+        if *length == 0 {
+            return Ok(Vec::new());
+        }
+        let valid_indices: Vec<usize> = valid
+            .iter()
+            .cloned()
+            .enumerate()
+            .filter(|(_, valid)| *valid)
+            .map(|(i, _)| i)
+            .take(encoding.data_chunks as usize)
+            .collect();
+
+        if valid_indices.len() < encoding.data_chunks as usize {
+            return Err(String::from("Too many erasures to recover"));
+        }
+
+        // Generate the inverted cauchy matrix for the valid indices to generate polynomial
+        // coefficients.
+        let inverted =
+            partial_cauchy_matrix(valid.iter().cloned(), encoding.data_chunks as usize, field)?
+                .invert(field)?;
+
+        // Generate the data cauchy matrix to be used with the coefficients to generate the
+        // original data.
+        let generator = cauchy_matrix(
+            0,
+            encoding.data_chunks as usize,
+            encoding.data_chunks as usize,
+            field,
+        )?
+        .mul(&inverted, field);
+        return decode_bytes_matrix(stream, &generator, &valid_indices[..], field);
     }
 }
 
@@ -390,16 +401,15 @@ mod tests {
     extern crate test;
     use super::*;
     // TODO: Consider using Criterion
-    use crate::finite_field::{DirectField, ExpLogField};
+    use crate::finite_field::{DirectField, ExpLogField, TableField};
     use std::str::FromStr;
     use test::Bencher;
 
-    #[test]
-    fn encode_bytes_empty() {
+    fn encode_bytes_empty<E: RSEncoder + Default>() {
         let direct = DirectField::default();
         let encoding: Encoding = FromStr::from_str("rs=9.4").unwrap();
         let expected = RSStream::empty(encoding.clone());
-        let encoder = LagrangeInterpolationEncoder {};
+        let encoder = E::default();
         assert_eq!(
             encoder.encode_bytes(encoding, &direct, &[]).unwrap(),
             expected
@@ -407,7 +417,16 @@ mod tests {
     }
 
     #[test]
-    fn encode_bytes_small() {
+    fn encode_bytes_empty_lagrange() {
+        encode_bytes_empty::<LagrangeInterpolationEncoder>();
+    }
+
+    #[test]
+    fn encode_bytes_empty_vandermonde() {
+        encode_bytes_empty::<VandermondeEncoder>();
+    }
+
+    fn encode_bytes_small<E: RSEncoder + Default>() {
         let direct = DirectField::default();
         let bytes = "DEADBEEF".as_bytes();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
@@ -420,7 +439,7 @@ mod tests {
             ],
             valid: vec![],
         };
-        let encoder = LagrangeInterpolationEncoder {};
+        let encoder = E::default();
         assert_eq!(
             encoder.encode_bytes(encoding, &direct, &bytes).unwrap(),
             expected
@@ -428,45 +447,69 @@ mod tests {
     }
 
     #[test]
-    fn encode_decode_vandermonde() {
-        let direct = DirectField::default();
-        let bytes = "DEADBEEF".as_bytes();
-        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        // let encoder = VandermondeEncoder::new(&encoding, &direct)
-        // .expect("Could not construct VandermondeEncoder.");
-        let encoder = VandermondeEncoder {};
-        let encoded = encoder.encode_bytes(encoding, &direct, &bytes).unwrap();
-        let encoded = RSStream {
-            valid: vec![true, false, true, true, true, false],
-            ..encoded
-        };
-        let decoder = VandermondeEncoder {};
-        let decoded = decoder.decode_bytes(&encoded, &direct);
-        assert_eq!(decoded.unwrap(), bytes);
-    }
-
-    #[bench]
-    fn encode_bytes_vandermonde_4k(b: &mut Bencher) {
-        let direct = ExpLogField::default();
-        let kilobyte_4 = 4 << 10;
-        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
-        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let encoder = VandermondeEncoder {};
-        b.iter(|| encoder.encode_bytes(encoding, &direct, &bytes[..]));
-    }
-
-    #[bench]
-    fn encode_bytes_4k(b: &mut Bencher) {
-        let direct = ExpLogField::default();
-        let kilobyte_4 = 4 << 10;
-        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
-        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let encoder = LagrangeInterpolationEncoder {};
-        b.iter(|| encoder.encode_bytes(encoding, &direct, &bytes[..]));
+    fn encode_bytes_small_lagrange() {
+        encode_bytes_small::<LagrangeInterpolationEncoder>();
     }
 
     #[test]
-    fn decode_bytes_no_erasures() {
+    fn encode_bytes_small_vandermonde() {
+        encode_bytes_small::<VandermondeEncoder>();
+    }
+
+    fn encode_bytes<E: RSEncoder + Default, F: Field256 + Default>(b: &mut Bencher, size: usize) {
+        let direct = F::default();
+        let bytes: Vec<u8> = (0..size).map(|_| rand::random::<u8>()).collect();
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let encoder = E::default();
+        b.iter(|| encoder.encode_bytes(encoding, &direct, &bytes[..]));
+    }
+
+    #[bench]
+    #[ignore]
+    fn encode_bytes_4k_lagrange(b: &mut Bencher) {
+        let size = 4 << 10;
+        encode_bytes::<LagrangeInterpolationEncoder, ExpLogField>(b, size);
+    }
+
+    #[bench]
+    fn encode_bytes_4k_vandermonde_explog(b: &mut Bencher) {
+        let size = 4 << 10;
+        encode_bytes::<VandermondeEncoder, ExpLogField>(b, size);
+    }
+
+    #[bench]
+    fn encode_bytes_4k_vandermonde_table(b: &mut Bencher) {
+        let size = 4 << 10;
+        encode_bytes::<VandermondeEncoder, TableField>(b, size);
+    }
+
+    #[bench]
+    fn encode_bytes_4k_cauchy_explog(b: &mut Bencher) {
+        let size = 4 << 10;
+        encode_bytes::<CauchyEncoder, ExpLogField>(b, size);
+    }
+
+    #[bench]
+    fn encode_bytes_4k_cauchy_table(b: &mut Bencher) {
+        let size = 4 << 10;
+        encode_bytes::<CauchyEncoder, TableField>(b, size);
+    }
+
+    #[bench]
+    #[ignore]
+    fn encode_bytes_1m_vandermonde_explog(b: &mut Bencher) {
+        let size = 1 << 20;
+        encode_bytes::<VandermondeEncoder, ExpLogField>(b, size);
+    }
+
+    #[bench]
+    #[ignore]
+    fn encode_bytes_1m_vandermonde_table(b: &mut Bencher) {
+        let size = 1 << 20;
+        encode_bytes::<VandermondeEncoder, TableField>(b, size);
+    }
+
+    fn decode_bytes_no_erasures<E: RSEncoder + Default>() {
         let direct = DirectField::default();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let input = RSStream {
@@ -478,7 +521,7 @@ mod tests {
             ],
             valid: vec![true, true, true, true, true, true],
         };
-        let encoder = LagrangeInterpolationEncoder {};
+        let encoder = E::default();
         let res = encoder.decode_bytes(&input, &direct);
         assert!(res.is_ok());
         assert_eq!(
@@ -487,30 +530,37 @@ mod tests {
         );
     }
 
-    #[bench]
-    fn decode_bytes_no_erasures_4k(b: &mut Bencher) {
-        let direct = ExpLogField::default();
-        let kilobyte_4 = 4 << 10;
-        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
-        let encoder = LagrangeInterpolationEncoder {};
-        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
-        b.iter(|| encoder.decode_bytes(&encoded, &direct));
-    }
-
-    #[bench]
-    fn decode_bytes_no_erasures_vandermonde_4k(b: &mut Bencher) {
-        let direct = ExpLogField::default();
-        let kilobyte_4 = 4 << 10;
-        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
-        let encoder = VandermondeEncoder {};
-        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
-        b.iter(|| encoder.decode_bytes(&encoded, &direct));
+    #[test]
+    fn decode_bytes_no_erasures_lagrange() {
+        decode_bytes_no_erasures::<LagrangeInterpolationEncoder>();
     }
 
     #[test]
-    fn decode_bytes_code_erasure() {
+    fn decode_bytes_no_erasures_vandermonde() {
+        decode_bytes_no_erasures::<VandermondeEncoder>();
+    }
+
+    fn decode_bytes_no_erasures_bench<E: RSEncoder + Default>(b: &mut Bencher, size: usize) {
+        let direct = ExpLogField::default();
+        let bytes: Vec<u8> = (0..size).map(|_| rand::random::<u8>()).collect();
+        let encoder = E::default();
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
+        b.iter(|| encoder.decode_bytes(&encoded, &direct));
+    }
+
+    #[bench]
+    #[ignore]
+    fn decode_bytes_no_erasures_4k_lagrange(b: &mut Bencher) {
+        decode_bytes_no_erasures_bench::<LagrangeInterpolationEncoder>(b, 4 << 10);
+    }
+
+    #[bench]
+    fn decode_bytes_no_erasures_4k_vandermonde(b: &mut Bencher) {
+        decode_bytes_no_erasures_bench::<VandermondeEncoder>(b, 1 << 10);
+    }
+
+    fn decode_bytes_code_erasure<E: RSEncoder + Default>() {
         let direct = DirectField::default();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let input = RSStream {
@@ -531,11 +581,19 @@ mod tests {
         );
     }
 
-    #[bench]
-    fn decode_bytes_code_erasures_4k(b: &mut Bencher) {
+    #[test]
+    fn decode_bytes_code_erasure_lagrange() {
+        decode_bytes_code_erasure::<LagrangeInterpolationEncoder>();
+    }
+
+    #[test]
+    fn decode_bytes_code_erasures_vandermonde() {
+        decode_bytes_code_erasure::<VandermondeEncoder>();
+    }
+
+    fn decode_bytes_code_erasures_bench<E: RSEncoder + Default>(b: &mut Bencher, size: usize) {
         let direct = ExpLogField::default();
-        let kilobyte_4 = 4 << 10;
-        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
+        let bytes: Vec<u8> = (0..size).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let encoder = LagrangeInterpolationEncoder {};
         let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
@@ -544,19 +602,17 @@ mod tests {
     }
 
     #[bench]
-    fn decode_bytes_code_erasures_vandermonde_4k(b: &mut Bencher) {
-        let direct = ExpLogField::default();
-        let kilobyte_4 = 4 << 10;
-        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
-        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let encoder = VandermondeEncoder {};
-        let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
-        encoded.valid = vec![true, true, true, true, false, false];
-        b.iter(|| encoder.decode_bytes(&encoded, &direct));
+    #[ignore]
+    fn decode_bytes_code_erasures_4k_lagrange(b: &mut Bencher) {
+        decode_bytes_code_erasures_bench::<LagrangeInterpolationEncoder>(b, 4 << 10);
     }
 
-    #[test]
-    fn decode_bytes_data_erasure() {
+    #[bench]
+    fn decode_bytes_code_erasures_4k_vandermonde(b: &mut Bencher) {
+        decode_bytes_code_erasures_bench::<VandermondeEncoder>(b, 4 << 10);
+    }
+
+    fn decode_bytes_data_erasure<E: RSEncoder + Default>() {
         let direct = DirectField::default();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let input = RSStream {
@@ -568,7 +624,7 @@ mod tests {
             ],
             valid: vec![false, true, false, true, true, true],
         };
-        let encoder = LagrangeInterpolationEncoder {};
+        let encoder = E::default();
         let res = encoder.decode_bytes(&input, &direct);
         assert_eq!(
             res.expect("Got: "),
@@ -576,32 +632,48 @@ mod tests {
         );
     }
 
-    #[bench]
-    fn decode_bytes_data_erasures_4k(b: &mut Bencher) {
-        let direct = ExpLogField::default();
-        let kilobyte_4 = 4 << 10;
-        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
-        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let encoder = LagrangeInterpolationEncoder {};
-        let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
-        encoded.valid = vec![false, true, false, true, true, true];
-        b.iter(|| encoder.decode_bytes(&encoded, &direct));
-    }
-
-    #[bench]
-    fn decode_bytes_data_erasures_vandermonde_4k(b: &mut Bencher) {
-        let direct = ExpLogField::default();
-        let kilobyte_4 = 4 << 10;
-        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
-        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let encoder = VandermondeEncoder {};
-        let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
-        encoded.valid = vec![false, true, false, true, true, true];
-        b.iter(|| encoder.decode_bytes(&encoded, &direct));
+    #[test]
+    fn decode_bytes_data_erasure_lagrange() {
+        decode_bytes_data_erasure::<LagrangeInterpolationEncoder>();
     }
 
     #[test]
-    fn decode_bytes_too_many_erasures() {
+    fn decode_bytes_data_erasures_vandermonde() {
+        decode_bytes_data_erasure::<VandermondeEncoder>();
+    }
+
+    #[test]
+    fn decode_bytes_data_erasures_cauchy() {
+        decode_bytes_data_erasure::<CauchyEncoder>();
+    }
+
+    fn decode_bytes_data_erasures_bench<E: RSEncoder + Default>(b: &mut Bencher, size: usize) {
+        let direct = ExpLogField::default();
+        let bytes: Vec<u8> = (0..size).map(|_| rand::random::<u8>()).collect();
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let encoder = E::default();
+        let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
+        encoded.valid = vec![false, true, false, true, true, true];
+        b.iter(|| encoder.decode_bytes(&encoded, &direct));
+    }
+
+    #[bench]
+    #[ignore]
+    fn decode_bytes_data_erasures_4k_lagrange(b: &mut Bencher) {
+        decode_bytes_data_erasures_bench::<LagrangeInterpolationEncoder>(b, 4 << 10);
+    }
+
+    #[bench]
+    fn decode_bytes_data_erasures_4k_vandermonde(b: &mut Bencher) {
+        decode_bytes_data_erasures_bench::<VandermondeEncoder>(b, 4 << 10);
+    }
+
+    #[bench]
+    fn decode_bytes_data_erasures_4k_cauchy(b: &mut Bencher) {
+        decode_bytes_data_erasures_bench::<CauchyEncoder>(b, 4 << 10);
+    }
+
+    fn decode_bytes_too_many_erasures<E: RSEncoder + Default>() {
         let direct = DirectField::default();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let input = RSStream {
@@ -613,20 +685,40 @@ mod tests {
             ],
             valid: vec![false, false, false, true, true, true],
         };
-        let encoder = LagrangeInterpolationEncoder {};
+        let encoder = E::default();
         let res = encoder.decode_bytes(&input, &direct);
         assert_eq!(res.is_err(), true);
     }
 
-    #[bench]
-    fn decode_bytes_too_many_erasures_4k(b: &mut Bencher) {
+    #[test]
+    fn decode_bytes_too_many_erasures_lagrange() {
+        decode_bytes_too_many_erasures::<LagrangeInterpolationEncoder>();
+    }
+
+    #[test]
+    fn decode_bytes_too_many_erasures_vandermonde() {
+        decode_bytes_too_many_erasures::<VandermondeEncoder>();
+    }
+
+    fn decode_bytes_too_many_erasures_bench<E: RSEncoder + Default>(b: &mut Bencher, size: usize) {
         let direct = ExpLogField::default();
-        let kilobyte_4 = 4 << 10;
-        let bytes: Vec<u8> = (0..kilobyte_4).map(|_| rand::random::<u8>()).collect();
+        let bytes: Vec<u8> = (0..size).map(|_| rand::random::<u8>()).collect();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
-        let encoder = LagrangeInterpolationEncoder {};
+        let encoder = E::default();
         let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
         encoded.valid = vec![false, false, false, true, true, true];
         b.iter(|| encoder.decode_bytes(&encoded, &direct));
     }
+
+    #[bench]
+    #[ignore]
+    fn decode_bytes_too_many_erasures_4k_lagrange(b: &mut Bencher) {
+        decode_bytes_too_many_erasures_bench::<LagrangeInterpolationEncoder>(b, 4 << 10);
+    }
+
+    #[bench]
+    fn decode_bytes_too_many_erasures_4k_vandermonde(b: &mut Bencher) {
+        decode_bytes_too_many_erasures_bench::<VandermondeEncoder>(b, 4 << 10);
+    }
+
 }

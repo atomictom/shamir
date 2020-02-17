@@ -15,10 +15,11 @@ use std::str::FromStr;
 
 // TODO:
 //
-// 1. Implement fast direct inverses used the extended euclidean algorithm.
-// 2. Implement interpolation via Vandermonde matrices.
+// 1. Implement fast direct inverses used the extended euclidean algorithm. -- too hard, not worth
+// 2. Implement interpolation via Vandermonde matrices. -- Done
 // 3. Implement interpolation via Cauchy matrices.
-// 4. Implement architecture-specific improvements.
+// 4. Transpose the output for encode (i.e. output[i] should be a vector of all the i'th indexes).
+// 5. Implement architecture-specific improvements.
 
 fn main() {
     let string = "Test string";

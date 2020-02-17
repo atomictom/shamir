@@ -120,11 +120,12 @@ impl Matrix {
     // as a reference to a mutable Vec. The output *must* be initialized with zeros and be the same
     // size as the input vector.
     pub fn mul_vec<F: Field256>(self: &Self, vec: &Vec<u8>, out: &mut Vec<u8>, field: &F) {
-        assert!(self.cols == vec.len());
-        assert!(self.rows == out.len());
+        // assert!(self.cols == vec.len());
+        // assert!(self.rows == out.len());
 
         // Set each element of the matrix
         for i in 0..self.rows {
+            out[i] = F::zero();
             for j in 0..self.cols {
                 out[i] = F::add(out[i], field.mul(self.mat[i][j], vec[j]));
             }
@@ -261,6 +262,49 @@ pub fn partial_vandermonde_matrix<F: Field256, I: Iterator<Item = bool>>(
         let mut row = Vec::with_capacity(cols);
         for j in 0..cols {
             row.push(field.exp(i as u8, j as u8));
+        }
+        matrix.push(row);
+    }
+    // Creating this should not ever fail.
+    return Matrix::try_from(matrix);
+}
+
+pub fn cauchy_matrix<F: Field256>(
+    start: usize,
+    rows: usize,
+    cols: usize,
+    field: &F,
+) -> Result<Matrix, &'static str> {
+    let mut matrix = Vec::with_capacity(rows);
+    let xs: Vec<u8> = (1..=127).collect();
+    let ys: Vec<u8> = (127..=255).collect();
+    for (e, i) in (start..(start + rows)).enumerate() {
+        let mut row = Vec::with_capacity(cols);
+        for j in 0..cols {
+            let x: u8 = xs[e];
+            let y: u8 = ys[j];
+            row.push(field.inv(F::sub(x, y)));
+        }
+        matrix.push(row);
+    }
+    // Creating this should not ever fail.
+    return Matrix::try_from(matrix);
+}
+
+pub fn partial_cauchy_matrix<F: Field256, I: Iterator<Item = bool>>(
+    rows: I,
+    cols: usize,
+    field: &F,
+) -> Result<Matrix, &'static str> {
+    let mut matrix = Vec::with_capacity(cols);
+    let xs: Vec<u8> = (1..=127).collect();
+    let ys: Vec<u8> = (127..=255).collect();
+    for (i, _) in rows.enumerate().filter(|(_, x)| *x) {
+        let mut row = Vec::with_capacity(cols);
+        for j in 0..cols {
+            let x: u8 = xs[i];
+            let y: u8 = ys[j];
+            row.push(field.inv(F::sub(x, y)));
         }
         matrix.push(row);
     }
