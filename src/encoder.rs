@@ -336,7 +336,6 @@ impl RSEncoder for CauchyEncoder {
         }
 
         let inverted = cauchy_matrix(
-            0,
             encoding.data_chunks as usize,
             encoding.data_chunks as usize,
             field,
@@ -344,7 +343,6 @@ impl RSEncoder for CauchyEncoder {
         .invert(field)?;
 
         let generator = cauchy_matrix(
-            encoding.data_chunks as usize,
             encoding.code_chunks as usize,
             encoding.data_chunks as usize,
             field,
@@ -385,7 +383,6 @@ impl RSEncoder for CauchyEncoder {
         // Generate the data cauchy matrix to be used with the coefficients to generate the
         // original data.
         let generator = cauchy_matrix(
-            0,
             encoding.data_chunks as usize,
             encoding.data_chunks as usize,
             field,
@@ -612,6 +609,11 @@ mod tests {
         decode_bytes_code_erasures_bench::<VandermondeEncoder>(b, 4 << 10);
     }
 
+    #[bench]
+    fn decode_bytes_code_erasures_4k_cauchy(b: &mut Bencher) {
+        decode_bytes_code_erasures_bench::<CauchyEncoder>(b, 4 << 10);
+    }
+
     fn decode_bytes_data_erasure<E: RSEncoder + Default>() {
         let direct = DirectField::default();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
@@ -720,5 +722,4 @@ mod tests {
     fn decode_bytes_too_many_erasures_4k_vandermonde(b: &mut Bencher) {
         decode_bytes_too_many_erasures_bench::<VandermondeEncoder>(b, 4 << 10);
     }
-
 }

@@ -270,7 +270,6 @@ pub fn partial_vandermonde_matrix<F: Field256, I: Iterator<Item = bool>>(
 }
 
 pub fn cauchy_matrix<F: Field256>(
-    start: usize,
     rows: usize,
     cols: usize,
     field: &F,
@@ -278,10 +277,10 @@ pub fn cauchy_matrix<F: Field256>(
     let mut matrix = Vec::with_capacity(rows);
     let xs: Vec<u8> = (1..=127).collect();
     let ys: Vec<u8> = (127..=255).collect();
-    for (e, i) in (start..(start + rows)).enumerate() {
+    for i in 0..rows {
         let mut row = Vec::with_capacity(cols);
         for j in 0..cols {
-            let x: u8 = xs[e];
+            let x: u8 = xs[i];
             let y: u8 = ys[j];
             row.push(field.inv(F::sub(x, y)));
         }
