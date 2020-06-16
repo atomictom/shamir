@@ -203,12 +203,14 @@ impl default::Default for TableField {
             inv: [0; 256],
             mul: [[0; 256]; 256],
         };
-        for i in 1..=255 {
-            res.inv[i as usize] = direct.inv(i)
-        }
+        // Calculate the multiplication table and inverses at the same time.
         for i in 0..=255 {
             for j in 0..=255 {
-                res.mul[i as usize][j as usize] = direct.mul(i, j);
+                let k = direct.mul(i, j);
+                res.mul[i as usize][j as usize] = k;
+                if k == 1 {
+                    res.inv[i as usize] = j
+                }
             }
         }
 

@@ -6,6 +6,7 @@ use crate::matrix::{
     cauchy_matrix, partial_cauchy_matrix, partial_vandermonde_matrix, vandermonde_matrix,
 };
 use crate::polynomial::Polynomial;
+use std::cmp;
 use std::iter;
 
 // Reed-Solomon encoded data.
@@ -138,7 +139,7 @@ impl RSEncoder for LagrangeInterpolationEncoder {
 
         // Now, for each input row, interpolate the polynomial and then generate our data
         // points.
-        let rows = length / encoding.data_chunks as usize;
+        let rows = (length + encoding.data_chunks as usize - 1) / encoding.data_chunks as usize;
         for row in 0..rows {
             let row = row as usize;
             let points: Vec<_> = valid_indices
@@ -148,6 +149,12 @@ impl RSEncoder for LagrangeInterpolationEncoder {
             let p = Polynomial::interpolate_points(&points[..], field);
             for col in 0..encoding.data_chunks {
                 let i = row * encoding.data_chunks as usize + col as usize;
+                // The length can be less than a multiple of encoding.data_chunks (but we zero pad
+                // so that the underlying data "exists", it's just not meaningful). Thus, break
+                // early if we get to the end.
+                if i >= *length {
+                    break;
+                }
                 res.insert(i, p.evaluate(col as u8, field));
             }
         }
@@ -214,14 +221,18 @@ fn decode_bytes_matrix<F: Field256>(
         .take(encoding.data_chunks as usize)
         .collect();
 
-    // Loop through each chunk and decode it.
-    let rows = length / encoding.data_chunks as usize;
+    // Loop through each chunk and decode it. The length may not be a multiple of
+    // encoding.data_chunks, so this is equivalent to taking the ceiling of length /
+    // encoding.data_chunks.
+    let rows = (length + encoding.data_chunks as usize - 1) / encoding.data_chunks as usize;
     for i in 0..rows {
         for (e, j) in valid_indices.iter().cloned().enumerate() {
             chunk[e] = codes[i as usize][j as usize];
         }
         generator.mul_vec(&chunk, &mut buffer, field);
-        res.extend(buffer.iter().take(encoding.data_chunks as usize));
+        // Only take as many as we need until res.len() == length.
+        let remaining = cmp::min(length - res.len(), encoding.data_chunks as usize);
+        res.extend(buffer.iter().take(remaining));
     }
 
     return Ok(res);
@@ -286,21 +297,21 @@ impl RSEncoder for VandermondeEncoder {
             return Err(String::from("Too many erasures to recover"));
         }
 
-        // // Fast path with no erasures
-        // if valid
-        //     .iter()
-        //     .cloned()
-        //     .take(encoding.data_chunks as usize)
-        //     .all(|x| x)
-        // {
-        //     let mut res = Vec::with_capacity(*length);
-        //     for i in 0..*length {
-        //         let row = i / encoding.data_chunks as usize;
-        //         let col = i % encoding.data_chunks as usize;
-        //         res.push(codes[row][col]);
-        //     }
-        //     return Ok(res);
-        // }
+        // Fast path with no erasures
+        if valid
+            .iter()
+            .cloned()
+            .take(encoding.data_chunks as usize)
+            .all(|x| x)
+        {
+            let mut res = Vec::with_capacity(*length);
+            for i in 0..*length {
+                let row = i / encoding.data_chunks as usize;
+                let col = i % encoding.data_chunks as usize;
+                res.push(codes[row][col]);
+            }
+            return Ok(res);
+        }
 
         // Generate the inverted vandermonde matrix for the valid indices to generate polynomial
         // coefficients.
@@ -355,7 +366,7 @@ impl RSEncoder for CauchyEncoder {
         let RSStream {
             length,
             encoding,
-            codes,
+            codes: _,
             valid,
         } = stream;
         if *length == 0 {
@@ -388,6 +399,7 @@ impl RSEncoder for CauchyEncoder {
             field,
         )?
         .mul(&inverted, field);
+        println!("Cauchy: {:?}", generator);
         return decode_bytes_matrix(stream, &generator, &valid_indices[..], field);
     }
 }
@@ -615,7 +627,7 @@ mod tests {
     }
 
     fn decode_bytes_data_erasure<E: RSEncoder + Default>() {
-        let direct = DirectField::default();
+        let direct = TableField::default();
         let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
         let input = RSStream {
             length: 8,
@@ -644,9 +656,42 @@ mod tests {
         decode_bytes_data_erasure::<VandermondeEncoder>();
     }
 
+    // #[test]
+    // fn decode_bytes_data_erasures_cauchy() {
+    //     decode_bytes_data_erasure::<CauchyEncoder>();
+    // }
+
+    fn encode_decode_bytes_data_erasure<E: RSEncoder + Default>() {
+        let direct = DirectField::default();
+        let bytes: Vec<u8> = (0..23).map(|_| rand::random::<u8>()).collect();
+        let encoding: Encoding = FromStr::from_str("rs=4.2").unwrap();
+        let encoder = E::default();
+        let mut encoded = encoder.encode_bytes(encoding, &direct, &bytes[..]).unwrap();
+        println!("Bytes: {:?}", bytes);
+        println!("Encoded codes: {:?}", encoded.codes);
+        // "Delete" the data chunk at index 1 and the code chunk at index 5.
+        encoded.valid = vec![true, false, true, true, true, true];
+        for stripe in encoded.codes[..].iter_mut() {
+            stripe[1] = 0;
+        }
+        println!("Encoded: {:?}", encoded);
+        let res = encoder.decode_bytes(&encoded, &direct);
+        assert_eq!(res.expect("Got: "), bytes);
+    }
+
     #[test]
-    fn decode_bytes_data_erasures_cauchy() {
-        decode_bytes_data_erasure::<CauchyEncoder>();
+    fn encode_decode_bytes_data_erasure_lagrange() {
+        encode_decode_bytes_data_erasure::<LagrangeInterpolationEncoder>();
+    }
+
+    #[test]
+    fn encode_decode_bytes_data_erasures_vandermonde() {
+        encode_decode_bytes_data_erasure::<VandermondeEncoder>();
+    }
+
+    #[test]
+    fn encode_decode_bytes_data_erasures_cauchy() {
+        encode_decode_bytes_data_erasure::<CauchyEncoder>();
     }
 
     fn decode_bytes_data_erasures_bench<E: RSEncoder + Default>(b: &mut Bencher, size: usize) {

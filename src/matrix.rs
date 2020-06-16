@@ -1,4 +1,4 @@
-use crate::finite_field::{DirectField, Field256, Ring};
+use crate::finite_field::Field256;
 use std::convert::TryFrom;
 use std::fmt::Display;
 use std::iter;
@@ -252,13 +252,16 @@ pub fn vandermonde_matrix<F: Field256>(
     return Matrix::try_from(matrix);
 }
 
+/// Returns a square Vandermonde matrix with potentially non-contiguous rows, each with a given
+/// number of cols. Picks which rows to generate based on an iterator of bools (only generates rows
+/// when true; generates a row for the given iterator index.
 pub fn partial_vandermonde_matrix<F: Field256, I: Iterator<Item = bool>>(
     rows: I,
     cols: usize,
     field: &F,
 ) -> Result<Matrix, &'static str> {
     let mut matrix = Vec::with_capacity(cols);
-    for (i, _) in rows.enumerate().filter(|(_, x)| *x) {
+    for (i, _) in rows.enumerate().filter(|(_, x)| *x).take(cols) {
         let mut row = Vec::with_capacity(cols);
         for j in 0..cols {
             row.push(field.exp(i as u8, j as u8));
@@ -276,7 +279,7 @@ pub fn cauchy_matrix<F: Field256>(
 ) -> Result<Matrix, &'static str> {
     let mut matrix = Vec::with_capacity(rows);
     let xs: Vec<u8> = (1..=127).collect();
-    let ys: Vec<u8> = (127..=255).collect();
+    let ys: Vec<u8> = (128..=255).collect();
     for i in 0..rows {
         let mut row = Vec::with_capacity(cols);
         for j in 0..cols {
@@ -297,8 +300,8 @@ pub fn partial_cauchy_matrix<F: Field256, I: Iterator<Item = bool>>(
 ) -> Result<Matrix, &'static str> {
     let mut matrix = Vec::with_capacity(cols);
     let xs: Vec<u8> = (1..=127).collect();
-    let ys: Vec<u8> = (127..=255).collect();
-    for (i, _) in rows.enumerate().filter(|(_, x)| *x) {
+    let ys: Vec<u8> = (128..=255).collect();
+    for (i, _) in rows.enumerate().filter(|(_, x)| *x).take(cols) {
         let mut row = Vec::with_capacity(cols);
         for j in 0..cols {
             let x: u8 = xs[i];
@@ -314,6 +317,7 @@ pub fn partial_cauchy_matrix<F: Field256, I: Iterator<Item = bool>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::finite_field::{DirectField, Ring};
 
     #[test]
     fn zero() {
