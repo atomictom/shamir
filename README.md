@@ -14,7 +14,10 @@ Shamir's secret sharing portion. Additionally, this was a chance to learn Rust.
 Currently the code is quite messy since I used a very slow method of computing
 RS at first (Lagrangian interpolation of polynomials) and only later added in a
 faster way (using Vandermonde matrices). Because it was a learning exercise, I
-kept both approaches.
+kept both approaches. Additionally, my inexperience with Rust meant that some of
+my interfaces were subpar or I had to make compromises to make things compile.
+Lastly, the code has been written in fits and bursts often on airplanes or when
+tired so I wouldn't say it's my highest quality code!
 
 ## Functionality
 
@@ -24,6 +27,18 @@ Shamir setup on top of the RS library. The Shamir setup takes a page from
 passphrases / diceware passwords and generates words instead of bytes so it's
 easier for humans to work with.
 
+## Performance
+
+The original implementation (Lagrangian interpolation) did about 1MiB/s (quite
+bad!). It currently does around 40MiB/s based on benchmarks, which is still
+fairly abysmal. I believe a purely code-based approach should be able to do
+around 400MiB/s based on other work I've seen (probably using memory more
+smartly to avoid copies and improve cache locality), and if using CPU intrinsics
+(e.g.  SIMD and CLMUL) I could likely achieve over 1GiB/s. There are also ways
+using Cauchy matrices (which I started to attempt but never got working) that
+can improve performance by finding encoding matrices that minimize the number of
+XORs. If I maintain interest, I may try some of this at some point.
+
 ## Future Work
 
 At some point I'd like to refactor the interface to be simpler to use and I'd
@@ -31,6 +46,9 @@ like to clean up the code to remove some of the cruft that came from learning
 RS.
 
 I'd also like to publish a tool for doing Shamir secret sharing at some point.
+
+As mentioned above, it'd be cool to improve the performance to try to get to
+1GiB/s.
 
 ## Demo
 
