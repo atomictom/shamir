@@ -11,7 +11,7 @@ fn gen_random_bytes(length: usize) -> Vec<u8> {
     return (0..length).map(|_| rng.gen()).collect();
 }
 
-pub fn shamir(shards: usize, required: usize, length: usize) {
+pub fn shamir(shards: usize, required: usize, length: usize) -> Vec<String> {
     assert!(shards >= required);
     println!("Shards: {}, required: {}", shards, required);
     let wordlist = words::load_word_list("./assets/wordlist256.txt");
@@ -39,17 +39,19 @@ pub fn shamir(shards: usize, required: usize, length: usize) {
         }
     }
 
-    for i in 0..shards + 1 {
+    let strings: Vec<String> = phrases.into_iter().map(|words| words.join(" ")).collect();
+    for (i, s) in strings.iter().enumerate() {
         if i == 0 {
-            println!("Password: {}", phrases[i].join(" "));
+            println!("Password: {}", s);
         } else {
-            println!("Shard {}: {}", i, phrases[i].join(" "));
+            println!("Shard {}: {}", i, s);
         }
     }
+    return strings;
 }
 
 // Note that phrases is positional
-pub fn unshamir(phrases: &[Option<&str>], required: usize) {
+pub fn unshamir(phrases: &[Option<&str>], required: usize) -> String {
     let wordlist: Vec<String> = words::load_word_list("./assets/wordlist256.txt");
     let valid: Vec<bool> = phrases.iter().map(|x| x.is_some()).collect();
     println!("Valid: {:?}", valid);
@@ -90,9 +92,8 @@ pub fn unshamir(phrases: &[Option<&str>], required: usize) {
     let encoder = VandermondeEncoder::default();
     let field = ExpLogField::default();
 
-    let mut password: Vec<&str> = Vec::with_capacity(length);
+    let mut password_words: Vec<&str> = Vec::with_capacity(length);
     for chunk in codes {
-        println!("Chunk: {:?}", chunk);
         let stream = RSStream {
             length: required,
             encoding: encoding,
@@ -100,10 +101,12 @@ pub fn unshamir(phrases: &[Option<&str>], required: usize) {
             valid: valid.clone(),
         };
         match encoder.decode_bytes(&stream, &field) {
-            Ok(data) => password.push(&wordlist[data[0] as usize]),
+            Ok(data) => password_words.push(&wordlist[data[0] as usize]),
             Err(e) => panic!("Got an error {} while decoding.", e),
         };
     }
+    let password = password_words.join(" ");
     println!("Shards: {}, required: {}", phrases.len(), required);
-    println!("Password: {}", password.join(" "));
+    println!("Password: {}", password);
+    return password;
 }

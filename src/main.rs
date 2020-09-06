@@ -54,5 +54,5 @@ fn main() {
             Some("neon foam open elbow bash award polo shack bath skip"),
         ],
         3,
-    )
+    );
 }
