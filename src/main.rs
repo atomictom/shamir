@@ -50,7 +50,10 @@ fn decode_string(stream: &RSStream) -> String {
             "Encoding did not work for RS stream: {:?}",
             stream
         ));
-    return String::from_utf8(bytes).expect("hope it works...");
+    return match String::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(e) => format!("Got utf8 parsing error: {:?}", e),
+    };
 }
 
 fn destroy_column(stream: &mut RSStream, column: usize) {
@@ -75,6 +78,15 @@ fn main() {
     destroy_column(&mut stream, 1);
     destroy_column(&mut stream, 8);
     destroy_column(&mut stream, 9);
+    println!("Damaged stream: {:?}", stream);
+    let string = decode_string(&stream);
+    println!("Recovered string: {:?}", string);
+
+    println!("\n");
+    println!("-- Failed RS Decoding -- ");
+    // Let's destroy one more column (but then say it's valid, otherwise we'll just get an error).
+    destroy_column(&mut stream, 2);
+    stream.valid[2] = true; // Sure it is...
     println!("Damaged stream: {:?}", stream);
     let string = decode_string(&stream);
     println!("Recovered string: {:?}", string);

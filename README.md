@@ -45,7 +45,6 @@ Length: 11
 Encoding: Encoding { data_chunks: 6, code_chunks: 4 }
 Codes: [[84, 101, 115, 116, 32, 115, 36, 1, 160, 213], [116, 114, 105, 110, 103, 0, 2, 42, 239, 192]]
 
-
 -- RS Decoding --
 Destroying data in column 0
 Destroying data in column 1
@@ -54,6 +53,10 @@ Destroying data in column 9
 Damaged stream: RSStream { length: 11, encoding: Encoding { data_chunks: 6, code_chunks: 4 }, codes: [[0, 0, 115, 116, 32, 115, 36, 1, 0, 0], [0, 0, 105, 110, 103, 0, 2, 42, 0, 0]], valid: [false, false, true, true, true, true, true, true, false, false] }
 Recovered string: "Test string"
 
+-- Failed RS Decoding --
+Destroying data in column 2
+Damaged stream: RSStream { length: 11, encoding: Encoding { data_chunks: 6, code_chunks: 4 }, codes: [[0, 0, 0, 116, 32, 115, 36, 1, 0, 0], [0, 0, 0, 110, 103, 0, 2, 42, 0, 0]], valid: [false, false, true, true, true, true, true, true, false, false] }
+Recovered string: "Got utf8 parsing error: FromUtf8Error { bytes: [25, 163, 0, 116, 32, 115, 232, 126, 0, 110, 103], error: Utf8Error { valid_up_to: 1, error_len: Some(1) } }"
 
 -- Shamiring it up --
 Shards: 5, required: 3
@@ -63,7 +66,6 @@ Shard 2: given moan elbow flip dance cheer panty decal lash fling
 Shard 3: ebay cult panty quota flint scowl angel work delay bash
 Shard 4: fifth pecan stud legal stunt ozone shun pep ditch from
 Shard 5: fifty panic tank diner rake remix olive clap motor rerun
-
 
 -- Unshamiring it down --
 Input shards:
