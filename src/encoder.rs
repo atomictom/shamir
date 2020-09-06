@@ -27,6 +27,7 @@ pub struct RSStream {
 impl RSStream {
     pub fn empty(encoding: Encoding) -> Self {
         RSStream {
+            // The logical length of the resulting data
             length: 0,
             encoding: encoding,
             codes: Vec::new(),
@@ -492,27 +493,27 @@ mod tests {
         encode_bytes::<VandermondeEncoder, TableField>(b, size);
     }
 
-    #[bench]
-    fn encode_bytes_4k_cauchy_explog(b: &mut Bencher) {
-        let size = 4 << 10;
-        encode_bytes::<CauchyEncoder, ExpLogField>(b, size);
-    }
+    // #[bench]
+    // fn encode_bytes_4k_cauchy_explog(b: &mut Bencher) {
+    //     let size = 4 << 10;
+    //     encode_bytes::<CauchyEncoder, ExpLogField>(b, size);
+    // }
+    //
+    // #[bench]
+    // fn encode_bytes_4k_cauchy_table(b: &mut Bencher) {
+    //     let size = 4 << 10;
+    //     encode_bytes::<CauchyEncoder, TableField>(b, size);
+    // }
 
     #[bench]
-    fn encode_bytes_4k_cauchy_table(b: &mut Bencher) {
-        let size = 4 << 10;
-        encode_bytes::<CauchyEncoder, TableField>(b, size);
-    }
-
-    #[bench]
-    #[ignore]
+    // #[ignore]
     fn encode_bytes_1m_vandermonde_explog(b: &mut Bencher) {
         let size = 1 << 20;
         encode_bytes::<VandermondeEncoder, ExpLogField>(b, size);
     }
 
     #[bench]
-    #[ignore]
+    // #[ignore]
     fn encode_bytes_1m_vandermonde_table(b: &mut Bencher) {
         let size = 1 << 20;
         encode_bytes::<VandermondeEncoder, TableField>(b, size);
@@ -621,10 +622,10 @@ mod tests {
         decode_bytes_code_erasures_bench::<VandermondeEncoder>(b, 4 << 10);
     }
 
-    #[bench]
-    fn decode_bytes_code_erasures_4k_cauchy(b: &mut Bencher) {
-        decode_bytes_code_erasures_bench::<CauchyEncoder>(b, 4 << 10);
-    }
+    // #[bench]
+    // fn decode_bytes_code_erasures_4k_cauchy(b: &mut Bencher) {
+    //     decode_bytes_code_erasures_bench::<CauchyEncoder>(b, 4 << 10);
+    // }
 
     fn decode_bytes_data_erasure<E: RSEncoder + Default>() {
         let direct = TableField::default();
@@ -689,10 +690,10 @@ mod tests {
         encode_decode_bytes_data_erasure::<VandermondeEncoder>();
     }
 
-    #[test]
-    fn encode_decode_bytes_data_erasures_cauchy() {
-        encode_decode_bytes_data_erasure::<CauchyEncoder>();
-    }
+    // #[test]
+    // fn encode_decode_bytes_data_erasures_cauchy() {
+    //     encode_decode_bytes_data_erasure::<CauchyEncoder>();
+    // }
 
     fn decode_bytes_data_erasures_bench<E: RSEncoder + Default>(b: &mut Bencher, size: usize) {
         let direct = ExpLogField::default();
@@ -715,10 +716,10 @@ mod tests {
         decode_bytes_data_erasures_bench::<VandermondeEncoder>(b, 4 << 10);
     }
 
-    #[bench]
-    fn decode_bytes_data_erasures_4k_cauchy(b: &mut Bencher) {
-        decode_bytes_data_erasures_bench::<CauchyEncoder>(b, 4 << 10);
-    }
+    // #[bench]
+    // fn decode_bytes_data_erasures_4k_cauchy(b: &mut Bencher) {
+    //     decode_bytes_data_erasures_bench::<CauchyEncoder>(b, 4 << 10);
+    // }
 
     fn decode_bytes_too_many_erasures<E: RSEncoder + Default>() {
         let direct = DirectField::default();
