@@ -64,12 +64,6 @@ pub fn unshamir(phrases: &[Option<&str>], required: usize) -> String {
         .collect();
     let length: usize = words.iter().map(|x| x.len()).max().unwrap_or(0);
     println!("Length: {}", length);
-    let nonempty: Vec<&Vec<u8>> = words
-        .iter()
-        .filter(|x| !x.is_empty())
-        .take(required)
-        .collect();
-    println!("Nonempty: {:?}", nonempty);
     assert!(words.iter().all(|x| x.len() == 0 || x.len() == length));
     let codes: Vec<Vec<u8>> = (0..length)
         .map(|i| {

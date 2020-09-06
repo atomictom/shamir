@@ -1,4 +1,4 @@
-use crate::finite_field::{DirectField, Field256};
+use crate::finite_field::Field256;
 use std::iter;
 
 // A polynomial over byte values.
@@ -116,6 +116,7 @@ impl Polynomial {
         return term;
     }
 
+    #[allow(unused)]
     fn single_term_ys<F: Field256>(ys: &[u8], i: u8, field: &F) -> Self {
         assert!((i as usize) < ys.len());
         let points: Vec<_> = ys.iter().enumerate().map(|(x, y)| (x as u8, *y)).collect();
@@ -155,6 +156,7 @@ impl Polynomial {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::finite_field::DirectField;
 
     #[test]
     fn degree_zero() {

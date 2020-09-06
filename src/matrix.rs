@@ -75,6 +75,7 @@ impl TryFrom<Vec<Vec<u8>>> for Matrix {
     }
 }
 
+#[allow(unused)]
 impl Matrix {
     pub fn zero(rows: usize, cols: usize) -> Matrix {
         let row: Vec<u8> = iter::repeat(0).take(cols).collect();

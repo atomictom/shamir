@@ -12,6 +12,7 @@ pub fn load_word_list(path: &str) -> Vec<String> {
         .collect();
 }
 
+#[allow(unused)]
 pub fn to_words<'a, I: Iterator<Item = u8>>(bytes: I, wordlist: &[&'a str]) -> Vec<&'a str> {
     assert!(wordlist.len() >= 256);
     return bytes.map(|b| wordlist[b as usize]).collect();
