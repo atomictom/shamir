@@ -18,18 +18,23 @@ pub fn to_words<'a, I: Iterator<Item = u8>>(bytes: I, wordlist: &[&'a str]) -> V
     return bytes.map(|b| wordlist[b as usize]).collect();
 }
 
-pub fn from_words<'a, S: AsRef<str>, I: Iterator<Item = &'a str>>(
-    words: I,
-    wordlist: &'a [S],
-) -> Vec<u8> {
+pub fn words_map<'a, S: AsRef<str>>(wordlist: &'a [S]) -> HashMap<&'a str, u8> {
     assert!(wordlist.len() >= 256);
     let words_index: HashMap<&'a str, u8> = HashMap::from_iter(
         wordlist
             .into_iter()
+            .take(256)
             .enumerate()
             .map(|(i, w)| (w.as_ref(), i as u8)),
     );
-    return words.map(|w| words_index[w] as u8).collect();
+    return words_index;
+}
+
+pub fn from_words<'a, I: Iterator<Item = &'a str>>(
+    words: I,
+    wordmap: &HashMap<&'a str, u8>,
+) -> Vec<u8> {
+    return words.map(|w| wordmap[w] as u8).collect();
 }
 
 // #[cfg(test)]

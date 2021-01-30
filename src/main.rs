@@ -10,118 +10,163 @@ mod shamir;
 mod words;
 
 use crate::shamir::*;
-use encoder::RSEncoder;
-use encoder::RSStream;
-use encoder::VandermondeEncoder;
-use encoding::Encoding;
-use finite_field::ExpLogField;
-use std::iter;
-use std::str::FromStr;
+use std::env::args;
+use std::io;
+use std::io::Write;
+use std::iter::FromIterator;
 
-// TODO:
-//
-// 1. Implement fast direct inverses used the extended euclidean algorithm. -- too hard, not worth
-// 2. Implement interpolation via Vandermonde matrices. -- Done
-// 3. Implement interpolation via Cauchy matrices.
-// 4. Transpose the output for encode (i.e. output[i] should be a vector of all the i'th indexes).
-// 5. Implement architecture-specific improvements.
-
-#[allow(unused)]
-fn encode_string(s: &str) -> RSStream {
-    println!("Encoding: {:?}", s);
-    println!("Bytes: {:?}", s.as_bytes());
-    let encoding = Encoding::from_str("rs=6.4").expect("Should parse");
-    let encoder = VandermondeEncoder::default();
-    let stream = encoder
-        .encode_bytes(encoding, &ExpLogField::default(), s.as_bytes())
-        .expect(&format!("Encoding did not work for byte stream: {}", s));
-    println!("Length: {:?}", stream.length);
-    println!("Encoding: {:?}", stream.encoding);
-    println!("Codes: {:?}", stream.codes);
-    return stream;
+enum ExitCode {
+    Success = 0,
+    WrongCommand,
+    WrongShards,
+    UnrecognizedArgument,
 }
 
-#[allow(unused)]
-fn decode_string(stream: &RSStream) -> String {
-    let encoder = VandermondeEncoder::default();
-    let bytes = encoder
-        .decode_bytes(stream, &ExpLogField::default())
-        .expect(&format!(
-            "Encoding did not work for RS stream: {:?}",
-            stream
-        ));
-    return match String::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(e) => format!("Got utf8 parsing error: {:?}", e),
-    };
-}
-
-fn destroy_column(stream: &mut RSStream, column: usize) {
-    println!("Destroying data in column {}", column);
-    stream.valid[column] = false;
-    stream
-        .codes
-        .iter_mut()
-        .for_each(|row: &mut Vec<u8>| row[column] = 0);
+fn exit(code: ExitCode) -> ! {
+    std::process::exit(code as i32);
 }
 
 fn main() {
-    println!("-- RS Encoding -- ");
-    let mut stream = encode_string("Test string");
-    stream.valid = iter::repeat(true).take(10).collect();
+    let mut args = args();
+    let _executable: String = args.next().unwrap_or("shamir".to_owned());
+    let command: String = args
+        .next()
+        .expect("Expected a command from 'generate' or 'restore'");
+    let remaining_args: Vec<String> = Vec::from_iter(args);
+    match &command[..] {
+        "generate" => generate(parse_options(&remaining_args)),
+        "restore" => restore(parse_options(&remaining_args)),
+        _ => {
+            println!("Expected a command from ['generate', 'restore']");
+            exit(ExitCode::WrongCommand);
+        }
+    };
+    exit(ExitCode::Success);
+}
 
-    println!("\n");
-    println!("-- RS Decoding -- ");
-    // 10 columns total, 6 data and 4 codes. We can destroy 4 and recover. Let's destroy 2 data and
-    // 2 codes.
-    destroy_column(&mut stream, 0);
-    destroy_column(&mut stream, 1);
-    destroy_column(&mut stream, 8);
-    destroy_column(&mut stream, 9);
-    println!("Damaged stream: {:?}", stream);
-    let string = decode_string(&stream);
-    println!("Recovered string: {:?}", string);
+#[derive(Debug, PartialEq)]
+struct Options {
+    total: Option<usize>,
+    required: Option<usize>,
+    words: Option<usize>,
+}
 
-    println!("\n");
-    println!("-- Failed RS Decoding -- ");
-    // Let's destroy one more column (but then say it's valid, otherwise we'll just get an error).
-    destroy_column(&mut stream, 2);
-    stream.valid[2] = true; // Sure it is...
-    println!("Damaged stream: {:?}", stream);
-    let string = decode_string(&stream);
-    println!("Recovered string: {:?}", string);
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            total: None,
+            required: None,
+            words: None,
+        }
+    }
+}
 
-    println!("\n");
-    println!("-- Shamiring it up --");
-    // Generates 6 total shards, the 0th shard is the password.
-    let shards: Vec<String> = shamir(5, 3, 10);
-    // Keep only the odd shards (half of them)
-    let some_shards: Vec<Option<&str>> = shards
-        .iter()
-        .enumerate()
-        .map(|(i, s)| if i % 2 == 1 { Some(s.as_str()) } else { None })
-        .collect();
+fn parse_options(args: &Vec<String>) -> Options {
+    let mut options: Options = Default::default();
+    let mut index = 0;
+    loop {
+        if args.len() - index < 2 {
+            break;
+        }
+        match &args[index][..] {
+            "--required" => {
+                options.required = Some(
+                    args[index + 1]
+                        .parse::<usize>()
+                        .expect("Could not parse the --required option"),
+                );
+            }
+            "--total" => {
+                options.total = Some(
+                    args[index + 1]
+                        .parse::<usize>()
+                        .expect("Could not parse the --total option"),
+                );
+            }
+            "--words" => {
+                options.words = Some(
+                    args[index + 1]
+                        .parse::<usize>()
+                        .expect("Could not parse the --words option"),
+                );
+            }
+            _ => {
+                println!("Unrecognized argument {}", args[index]);
+                exit(ExitCode::UnrecognizedArgument);
+            }
+        }
+        index += 2;
+    }
+    if (options.total.is_none() && options.required.is_none()) || options.total > options.required {
+        println!("Total shards must be larger than required shards (the secret is 1 shard).");
+        println!("Options: {:?}", options);
+        exit(ExitCode::WrongShards);
+    }
 
-    // Password: stunt bath gains cheer pecan haven date happy hatch swan
-    // unshamir(
-    //     &[
-    //         None,
-    //         Some("wilt morse bring trout neon view pep ebay found cage"),
-    //         None,
-    //         Some("vowel shun lance bring crop ebay skip slush decal elves"),
-    //         None,
-    //         Some("neon foam open elbow bash award polo shack bath skip"),
-    //     ],
-    //     3,
-    // );
+    return options;
+}
 
-    println!("\n");
-    println!("-- Unshamiring it down --");
-    let pretty: Vec<String> = some_shards
-        .iter()
-        .enumerate()
-        .map(|(i, x)| format!("\tShard {}: {:?}", i, x))
-        .collect();
-    println!("Input shards: \n{}", pretty.join("\n"));
-    unshamir(&some_shards[..], 3);
+fn generate(options: Options) {
+    println!("-- Generating secret and shards... --");
+    let shards: Vec<String> = shamir(
+        options.total.unwrap_or(6),
+        options.required.unwrap_or(3),
+        options.words.unwrap_or(10),
+    );
+    for (i, s) in shards.iter().enumerate() {
+        if i == 0 {
+            println!("Secret: {}", s);
+        } else {
+            println!("Shard {}: {}", i, s);
+        }
+    }
+}
+
+fn prompt(msg: &str) -> io::Result<String> {
+    let mut input: String = String::new();
+    let handle = std::io::stdin();
+    print!("{}", msg);
+    io::stdout().flush()?;
+    let res = handle.read_line(&mut input);
+    match res {
+        Err(e) => {
+            println!("Could not read line: {}", e);
+            return Err(e);
+        }
+        Ok(_) => return Ok(input),
+    }
+}
+
+fn restore(options: Options) {
+    println!("-- Restoring the secret... --");
+    let total = match options.total {
+        None => prompt("How many total shards are there?: ")
+            .expect("Could not determine the total number of shards.")
+            .trim()
+            .parse::<usize>()
+            .expect("Could not convert total shards to integer."),
+        Some(n) => n,
+    };
+    let required = match options.required {
+        None => prompt("How many required shards are there?: ")
+            .expect("Could not determine the number of required shards.")
+            .trim()
+            .parse::<usize>()
+            .expect("Could not convert required shards to integer."),
+        Some(n) => n,
+    };
+
+    println!(
+        "You will be prompted to enter {} shards (in any order)...",
+        required
+    );
+
+    let mut some_shards: Vec<String> = Vec::new();
+    for i in 0..required {
+        let shard = prompt(format!("Input shard {}: ", i).as_str())
+            .expect(format!("Could not read shard {}", i).as_str());
+        some_shards.push(shard);
+    }
+
+    unshamir(&some_shards, required, total + 1);
 }
