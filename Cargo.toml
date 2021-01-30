@@ -1,5 +1,5 @@
 [package]
-name = "reed-solomon"
+name = "shamir"
 version = "0.1.0"
 authors = ["Thomas Manning <thomasmanning@google.com>"]
 edition = "2018"

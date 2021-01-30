@@ -7,8 +7,6 @@ use crate::words;
 use rand::Rng;
 use std::iter;
 
-const WORDLIST_PATH: &'static str = "./assets/wordlist256.txt";
-
 fn gen_random_bytes(length: usize) -> Vec<u8> {
     let mut rng = rand::thread_rng();
     return (0..length).map(|_| rng.gen()).collect();
@@ -17,7 +15,7 @@ fn gen_random_bytes(length: usize) -> Vec<u8> {
 pub fn shamir(shards: usize, required: usize, length: usize) -> Vec<String> {
     assert!(shards >= required);
     println!("Shards: {}, required: {}", shards, required);
-    let wordlist = words::load_word_list(WORDLIST_PATH);
+    let wordlist = words::load_static_word_list();
 
     let encoding = Encoding {
         data_chunks: required as u8,
@@ -59,7 +57,7 @@ pub fn shamir(shards: usize, required: usize, length: usize) -> Vec<String> {
 // Note that phrases is positional
 pub fn unshamir(phrases: &Vec<String>, required: usize, total: usize) -> String {
     // Map the words back to u8s
-    let wordlist: Vec<String> = words::load_word_list(WORDLIST_PATH);
+    let wordlist: Vec<String> = words::load_static_word_list();
     let wordmap = words::words_map(&wordlist[..]);
     let words: Vec<Vec<u8>> = phrases
         .into_iter()

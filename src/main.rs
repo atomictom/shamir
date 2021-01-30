@@ -17,6 +17,7 @@ use std::iter::FromIterator;
 
 enum ExitCode {
     Success = 0,
+    NoCommand,
     WrongCommand,
     WrongShards,
     UnrecognizedArgument,
@@ -29,18 +30,23 @@ fn exit(code: ExitCode) -> ! {
 fn main() {
     let mut args = args();
     let _executable: String = args.next().unwrap_or("shamir".to_owned());
-    let command: String = args
-        .next()
-        .expect("Expected a command from 'generate' or 'restore'");
-    let remaining_args: Vec<String> = Vec::from_iter(args);
-    match &command[..] {
-        "generate" => generate(parse_options(&remaining_args)),
-        "restore" => restore(parse_options(&remaining_args)),
-        _ => {
+    match args.next() {
+        None => {
             println!("Expected a command from ['generate', 'restore']");
-            exit(ExitCode::WrongCommand);
+            exit(ExitCode::NoCommand);
         }
-    };
+        Some(command) => {
+            let remaining_args: Vec<String> = Vec::from_iter(args);
+            match &command[..] {
+                "generate" => generate(parse_options(&remaining_args)),
+                "restore" => restore(parse_options(&remaining_args)),
+                _ => {
+                    println!("Expected a command from ['generate', 'restore']");
+                    exit(ExitCode::WrongCommand);
+                }
+            };
+        }
+    }
     exit(ExitCode::Success);
 }
 
@@ -97,8 +103,8 @@ fn parse_options(args: &Vec<String>) -> Options {
         }
         index += 2;
     }
-    if (options.total.is_none() && options.required.is_none()) || options.total > options.required {
-        println!("Total shards must be larger than required shards (the secret is 1 shard).");
+    if options.total.is_some() && options.required.is_some() && options.total <= options.required {
+        println!("Total shards must be larger than required shards (the secret uses a shard).");
         println!("Options: {:?}", options);
         exit(ExitCode::WrongShards);
     }
@@ -108,11 +114,29 @@ fn parse_options(args: &Vec<String>) -> Options {
 
 fn generate(options: Options) {
     println!("-- Generating secret and shards... --");
-    let shards: Vec<String> = shamir(
-        options.total.unwrap_or(6),
-        options.required.unwrap_or(3),
-        options.words.unwrap_or(10),
-    );
+    let required = match options.required {
+        None => {
+            println!("No --required flag, using default of 3.");
+            3
+        }
+        Some(required) => required,
+    };
+    let total = match options.total {
+        None => {
+            println!("No --total flag, using default of --required + 1.");
+            required + 1
+        }
+        Some(total) => total,
+    };
+    let words = match options.words {
+        None => {
+            println!("No --words flag, using default of 10.");
+            3
+        }
+        Some(words) => words,
+    };
+    let shards: Vec<String> = shamir(total, required, words);
+
     for (i, s) in shards.iter().enumerate() {
         if i == 0 {
             println!("Secret: {}", s);

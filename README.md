@@ -1,101 +1,83 @@
-# Experimental Reed-Solomon and Shamir Secret Sharing in Rust
+# Experimental Shamir Secret Sharing in Rust
 
 ## Background
 
 This evolved out of an exercise in [A Programmer's Introduction to
 Mathematics](https://www.amazon.co.uk/Programmers-Introduction-Mathematics-Dr-Jeremy/dp/1727125452)
 from the chapter on Polynomials. The exercise had to do with [Shamir's secret
-sharing algorithm](https://en.wikipedia.org/wiki/Shamir%27s_Secret_Sharing), but
-I was familiar enough with Reed-Solomon to realize they were probably based on
-the same concepts. I was looking for a programming project while reading that,
-so I decided to make a library to do RS encoding, and later actually did the
-Shamir's secret sharing portion. Additionally, this was a chance to learn Rust.
+sharing algorithm](https://en.wikipedia.org/wiki/Shamir%27s_Secret_Sharing), I
+was looking for a programming project while reading that, so I decided to make
+it. Additionally, this was a chance to learn Rust.
 
 Currently the code is quite messy since I used a very slow method of computing
 RS at first (Lagrangian interpolation of polynomials) and only later added in a
 faster way (using Vandermonde matrices). Because it was a learning exercise, I
 kept both approaches. Additionally, my inexperience with Rust meant that some of
 my interfaces were subpar or I had to make compromises to make things compile.
-Lastly, the code has been written in fits and bursts often on airplanes or when
-tired so I wouldn't say it's my highest quality code!
+Lastly, the code has been written in fits and bursts often on airplanes or in
+the evenings so I wouldn't say it's my highest quality code!
 
 ## Functionality
 
-Right now it's very half baked. There is a pseudo-library for doing RS encoding,
-but it's not very easy to use. There are some functions for doing a limited
-Shamir setup on top of the RS library. The Shamir setup takes a page from
-passphrases / diceware passwords and generates words instead of bytes so it's
-easier for humans to work with.
+Shamir secret sharing works by generating a set of shards (based on
+polynomials), using one of them as a secret, and distributing the other shards.
+If some subset of the shards come together, all the shards (including the
+secret) can be regenerated. The parameters are the total number of shards to
+generate (with one being the secret) and the required number of shards to
+regenerate all shards.
 
-## Performance
+Shards are generated as "phrases" which are repeated rounds of polynomial
+generation with 8-bit bytes as the underlying symbol. The bytes are transformed
+into words based on a list provided with the program to form something like
+diceware passphrases. The number of words in the phrase can be controlled by a
+flag.
 
-The original implementation (Lagrangian interpolation) did about 1MiB/s (quite
-bad!). It currently does around 40MiB/s based on benchmarks, which is still
-fairly abysmal. I believe a purely code-based approach should be able to do
-around 400MiB/s based on other work I've seen (probably using memory more
-smartly to avoid copies and improve cache locality), and if using CPU intrinsics
-(e.g.  SIMD and CLMUL) I could likely achieve over 1GiB/s. There are also ways
-using Cauchy matrices (which I started to attempt but never got working) that
-can improve performance by finding encoding matrices that minimize the number of
-XORs. If I maintain interest, I may try some of this at some point.
-
-## Future Work
-
-At some point I'd like to refactor the interface to be simpler to use and I'd
-like to clean up the code to remove some of the cruft that came from learning
-RS.
-
-I'd also like to publish a tool for doing Shamir secret sharing at some point.
-
-As mentioned above, it'd be cool to improve the performance to try to get to
-1GiB/s.
+The binary is meant to be used as a CLI tool with flags for the total and
+required number of shards and phrase length. When restoring, it is important
+that the original parameters are passed back in. However, the first word in each
+shard is its index, so shards can be passed back in any order. While there are
+no flags for the shards, they can be passed in via stdin as a newline separated
+list.
 
 ## Demo
 
 ```
-$ cargo run
-...
+$ ./shamir generate --total 6 --required 3 --words 10
 
--- RS Encoding --
-Encoding: "Test string"
-Bytes: [84, 101, 115, 116, 32, 115, 116, 114, 105, 110, 103]
-Length: 11
-Encoding: Encoding { data_chunks: 6, code_chunks: 4 }
-Codes: [[84, 101, 115, 116, 32, 115, 36, 1, 160, 213], [116, 114, 105, 110, 103, 0, 2, 42, 239, 192]]
-
--- RS Decoding --
-Destroying data in column 0
-Destroying data in column 1
-Destroying data in column 8
-Destroying data in column 9
-Damaged stream: RSStream { length: 11, encoding: Encoding { data_chunks: 6, code_chunks: 4 }, codes: [[0, 0, 115, 116, 32, 115, 36, 1, 0, 0], [0, 0, 105, 110, 103, 0, 2, 42, 0, 0]], valid: [false, false, true, true, true, true, true, true, false, false] }
-Recovered string: "Test string"
-
--- Failed RS Decoding --
-Destroying data in column 2
-Damaged stream: RSStream { length: 11, encoding: Encoding { data_chunks: 6, code_chunks: 4 }, codes: [[0, 0, 0, 116, 32, 115, 36, 1, 0, 0], [0, 0, 0, 110, 103, 0, 2, 42, 0, 0]], valid: [false, false, true, true, true, true, true, true, false, false] }
-Recovered string: "Got utf8 parsing error: FromUtf8Error { bytes: [25, 163, 0, 116, 32, 115, 232, 126, 0, 110, 103], error: Utf8Error { valid_up_to: 1, error_len: Some(1) } }"
-
--- Shamiring it up --
-Shards: 5, required: 3
-Password: cult date rerun flint hump spree scoff front angle bash
-Shard 1: rack syrup cola twine spew stunt tiger spree salon pull
-Shard 2: given moan elbow flip dance cheer panty decal lash fling
-Shard 3: ebay cult panty quota flint scowl angel work delay bash
-Shard 4: fifth pecan stud legal stunt ozone shun pep ditch from
-Shard 5: fifty panic tank diner rake remix olive clap motor rerun
-
--- Unshamiring it down --
-Input shards:
-        Shard 0: None
-        Shard 1: Some("rack syrup cola twine spew stunt tiger spree salon pull")
-        Shard 2: None
-        Shard 3: Some("ebay cult panty quota flint scowl angel work delay bash")
-        Shard 4: None
-        Shard 5: Some("fifty panic tank diner rake remix olive clap motor rerun")
-Valid: [false, true, false, true, false, true]
-Length: 10
-Encoding: Encoding { data_chunks: 3, code_chunks: 3 }
+-- Generating secret and shards... --
 Shards: 6, required: 3
-Password: cult date rerun flint hump spree scoff front angle bash
+Secret: smash putt savor union cola legal body shout draw slaw
+Shard 1: affix urban decal sharp mummy stain remix trout zebra haven cleft
+Shard 2: agony wafer virus swoop trade cleft tweak query opera crave pep
+Shard 3: ajar slaw crop decal crisp puppy tiger mop said clash path
+Shard 4: angel zebra daily vowel mop tweak clap risk bring plant old
+Shard 5: angle clap fling shout diner baton ashes grid petri path sharp
 ```
+
+```
+$ cat <<END | ./shamir restore --total 6 --required 3 --words 10
+affix urban decal sharp mummy stain remix trout zebra haven cleft
+angel zebra daily vowel mop tweak clap risk bring plant old
+agony wafer virus swoop trade cleft tweak query opera crave pep
+END
+
+-- Restoring the secret... --
+You will be prompted to enter 3 shards (in any order)...
+Input shard 0: Input shard 1: Input shard 2: Valid: [false, true, true, false, true, false, false]
+Length: 11
+Encoding: Encoding { data_chunks: 3, code_chunks: 4 }
+Shards: 3, required: 3
+Password: smash putt savor union cola legal body shout draw slaw
+```
+
+## Disclaimer
+
+I'm not a security professional and may have made mistakes or have bugs in my
+code. I do not recommend this for any serious applications. It's published only
+as a cool project for learning (both my learning and that of anyone interested).
+
+The implementation currently uses exponent and log tables to implement
+multiplication which is susceptible to side channel attacks (memory timing).
+While there is a direct implementation of multiplication (via "Russian Peasant
+Multiplication"), there is no direct implementation of division (it's generated
+by brute forcing multiplication to find the inverse element).

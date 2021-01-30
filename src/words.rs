@@ -1,11 +1,25 @@
 // Convert between bytes and string words
 
 use std::collections::HashMap;
+use std::include_bytes;
 use std::iter::FromIterator;
 
+#[allow(unused)]
+const WORDLIST_PATH: &'static str = "../assets/wordlist256.txt";
+const WORDLIST_RAW: &'static [u8] = include_bytes!("../assets/wordlist256.txt");
+
+#[allow(unused)]
 pub fn load_word_list(path: &str) -> Vec<String> {
     return std::fs::read_to_string(path)
         .expect(&format!("Could not read file at path {}", path))
+        .lines()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+}
+
+pub fn load_static_word_list() -> Vec<String> {
+    return String::from_utf8_lossy(WORDLIST_RAW)
         .lines()
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
